@@ -169,7 +169,7 @@ def esquisse(d, magic, entendus, duree, phrases=()):
         try:
             import grilles as G
             avec = []
-            G.chercher_grilles(artiste, titre, en_tout=40, avec_paroles=avec)
+            G.chercher_grilles(artiste, titre, en_tout=30, avec_paroles=avec)
             sur, infos = G.accords_sur_les_mots(avec, mots, temps, accords, C.lire_accord)
             bilan["grilles_en_ligne_sur_les_mots"] = infos
             if infos.get("retenues"):

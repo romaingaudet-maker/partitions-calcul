@@ -302,50 +302,107 @@ def pages_acordesweb(artiste, titre, nombre=1):
     return list(dict.fromkeys(f"https://acordesweb.com/cancion/{f(artiste)}/{f(_court(titre))}" for f in (limace, sans)))
 
 
-SITES = (("cifraclub", pages_cifraclub), ("guitartabs", pages_guitartabs), ("guitaretab", pages_guitaretab), ("acordesweb", pages_acordesweb))
+def _proche(a, b, seuil=0.86):
+    import difflib
+    a, b = limace(a, ""), limace(b, "")
+    return bool(a) and (a == b or difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= seuil)
 
 
-def chercher_grilles(artiste, titre, en_tout=75, avec_paroles=None):
-    """Renvoie [(liste de symboles d'accords, site d'origine)] pour les pages où une grille a pu être lue.
-    Plusieurs sites sont interrogés tour à tour (ceux dont les règles l'admettent, voir CHOIX.md) ; l'ensemble est
-    borné à `en_tout` secondes, et la panne ou le refus d'un site n'empêche pas les autres.
-    avec_paroles : liste à remplir, si on la donne, des grilles dont les accords sont accrochés aux mots
-    ([(lignes_avec_accords, site)], voir accords_sur_les_mots)."""
-    trouvees, fin = [], time.monotonic() + en_tout
-    for nom, pages in SITES:
+def pages_tabs4acoustic(artiste, titre, nombre=1):
+    """La page du morceau sur tabs4acoustic.com (site français) : son moteur trouve l'artiste, dont la page liste les titres."""
+    base = "https://www.tabs4acoustic.com/"
+    u = base + "recherche.html?" + urllib.parse.urlencode({"FindMe": artiste})
+    if not admis(u):
+        return []
+    fiches = [l for l in dict.fromkeys(re.findall(r'href=["\'](?:https://www\.tabs4acoustic\.com/)?/?(tablatures-partitions/[a-z0-9-]+-tabs-guitare-\d+\.html)["\']', _lire(u, 300_000)))
+              if _proche(l.split("/")[1].split("-tabs-guitare")[0], artiste, 0.8)]
+    if not fiches or not admis(base + fiches[0]):
+        return []
+    liens = re.findall(r'href=["\'](?:https://www\.tabs4acoustic\.com/)?/?(tablatures-partitions/[a-z0-9-]+/([a-z0-9-]+?)-tab-[a-z-]*\d+\.html)["\']', _lire(base + fiches[0], 300_000))
+    return [base + l for l, nom in dict.fromkeys(liens) if _proche(nom, _court(titre))][:nombre]
+
+
+def pages_ukuleletabs(artiste, titre, nombre=2):
+    """Pages du morceau sur ukulele-tabs.com, d'après son moteur de recherche (les accords sont ceux de la chanson)."""
+    base = "https://www.ukulele-tabs.com"
+    u = base + "/search-uke-chords.html?" + urllib.parse.urlencode({"find": _court(titre)})
+    if not admis(u):
+        return []
+    mots = set(_simple(artiste).split())
+    liens = re.findall(r'href=["\'](/uke-songs/([a-z0-9-]+)/([a-z0-9-]+?)-uke-tab-\d+\.html)["\']', _lire(u, 300_000))
+    return [base + l for l, qui, nom in dict.fromkeys(liens) if mots & set(qui.split("-")) and _proche(nom, _court(titre))][:nombre]
+
+
+def pages_chordsbase(artiste, titre, nombre=1):
+    """La page du morceau sur chordsbase.com, à son adresse directe."""
+    return [f"https://www.chordsbase.com/guitar-chords/{limace(artiste)}/{limace(_court(titre))}"]
+
+
+SITES = (("cifraclub", pages_cifraclub), ("guitartabs", pages_guitartabs), ("guitaretab", pages_guitaretab), ("acordesweb", pages_acordesweb),
+         ("tabs4acoustic", pages_tabs4acoustic), ("ukuleletabs", pages_ukuleletabs), ("chordsbase", pages_chordsbase))
+
+
+def _un_site(nom, pages, artiste, titre, fin, veut_paroles):
+    """Interroge un site. Renvoie (grilles [(accords, hôte)], grilles accrochées aux mots [(lignes, hôte)], journal)."""
+    trouvees, avec, journal = [], [], []
+    try:
+        adresses = pages(artiste, titre)
+    except Exception as e:
+        return trouvees, avec, [f"    {nom} : recherche refusée ou impossible ({type(e).__name__} {str(getattr(e, 'code', '') or e)[:60]})"]
+    journal.append(f"    {nom} : {len(adresses)} pages proposées")
+    for u in adresses:
+        hote = urllib.parse.urlparse(u).netloc
         if time.monotonic() > fin:
             break
         try:
-            adresses = pages(artiste, titre)
-        except Exception as e:
-            print(f"    {nom} : recherche refusée ou impossible ({type(e).__name__} {str(getattr(e, 'code', '') or e)[:60]})", flush=True)
+            if not admis(u):
+                journal.append(f"      {hote} : lecture non admise")
+                continue
+            page = _lire(u)
+            accords = accords_de_la_page(page)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:                                           # 404 : le site n'a pas ce morceau, rien à signaler
+                journal.append(f"      {hote} : illisible (HTTPError {e.code})")
             continue
-        print(f"    {nom} : {len(adresses)} pages proposées", flush=True)
-        for u in adresses:
-            hote = urllib.parse.urlparse(u).netloc
-            if time.monotonic() > fin:
-                break
-            try:
-                if not admis(u):
-                    print(f"      {hote} : lecture non admise", flush=True)
-                    continue
-                page = _lire(u)
-                accords = accords_de_la_page(page)
-            except urllib.error.HTTPError as e:
-                if e.code != 404:                                       # 404 : le site n'a pas ce morceau, rien à signaler
-                    print(f"      {hote} : illisible (HTTPError {e.code})", flush=True)
-                continue
-            except Exception as e:
-                print(f"      {hote} : illisible ({type(e).__name__} {getattr(e, 'code', '')})", flush=True)
-                continue
-            print(f"      {hote} : {len(accords)} accords lus" + (f" ({len(set(accords))} différents)" if accords else ""), flush=True)
-            if len(accords) >= 8 and len(set(accords)) >= 3:
-                trouvees.append((accords, hote))
-                if avec_paroles is not None:
-                    lignes = lignes_avec_accords(page)
-                    print(f"      {hote} : {len(lignes)} lignes chantées portent leurs accords ({sum(len(a) for _, a in lignes)} accords)", flush=True)
-                    if len(lignes) >= 4:
-                        avec_paroles.append((lignes, hote))
+        except Exception as e:
+            journal.append(f"      {hote} : illisible ({type(e).__name__} {getattr(e, 'code', '')})")
+            continue
+        journal.append(f"      {hote} : {len(accords)} accords lus" + (f" ({len(set(accords))} différents)" if accords else ""))
+        if len(accords) >= 8 and len(set(accords)) >= 3:
+            trouvees.append((accords, hote))
+            if veut_paroles:
+                lignes = lignes_avec_accords(page)
+                journal.append(f"      {hote} : {len(lignes)} lignes chantées portent leurs accords ({sum(len(a) for _, a in lignes)} accords)")
+                if len(lignes) >= 4:
+                    avec.append((lignes, hote))
+    return trouvees, avec, journal
+
+
+def chercher_grilles(artiste, titre, en_tout=45, avec_paroles=None):
+    """Renvoie [(liste de symboles d'accords, site d'origine)] pour les pages où une grille a pu être lue.
+    Les sites retenus (ceux dont les règles l'admettent, voir CHOIX.md) sont interrogés en même temps, chacun à son
+    rythme ; l'ensemble est borné à `en_tout` secondes, et la panne ou le refus d'un site n'empêche pas les autres.
+    avec_paroles : liste à remplir, si on la donne, des grilles dont les accords sont accrochés aux mots
+    ([(lignes_avec_accords, site)], voir accords_sur_les_mots)."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+    trouvees, fin = [], time.monotonic() + en_tout
+    bassin = ThreadPoolExecutor(max_workers=len(SITES))
+    taches = [bassin.submit(_un_site, nom, pages, artiste, titre, fin, avec_paroles is not None) for nom, pages in SITES]
+    wait(taches, timeout=en_tout + 5)
+    for (nom, _), tache in zip(SITES, taches):
+        if not tache.done():
+            print(f"    {nom} : trop lent, laissé de côté", flush=True)
+            continue
+        try:
+            t, a, journal = tache.result()
+        except Exception as e:
+            print(f"    {nom} : {type(e).__name__}", flush=True)
+            continue
+        print("\n".join(journal), flush=True)
+        trouvees += t
+        if avec_paroles is not None:
+            avec_paroles += a
+    bassin.shutdown(wait=False, cancel_futures=True)
     return trouvees
 
 
