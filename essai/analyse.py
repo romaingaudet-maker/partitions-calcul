@@ -1864,6 +1864,13 @@ def traiter(t):
             donnees["detail_sans_basse"] = e.astype(np.float32)
             donnees["btc_sans_basse"] = familles(e).astype(np.float32)
         donnees["detail"] = None if detail is None else detail.astype(np.float32)
+        try:                                                            # grilles en ligne accrochées aux mots (placement provisoire)
+            import grilles as G
+            from commun import lire_accord
+            donnees["grilles_sur_les_mots"] = G.accrocher_aux_mots(grilles_avec_paroles, provisoires, [float(x) for x in temps], lire_accord)
+            print(f"  banc d'essai : {len(donnees['grilles_sur_les_mots'])} grilles accrochées aux mots gardées", flush=True)
+        except Exception:
+            traceback.print_exc()
         try:                                                            # lecture fine des notes : accompagnement, puis basse seule
             donnees["notes_fines"] = notes_fines(hors_basse, sr, temps)
             donnees["basse_fine"] = notes_fines(y_piste, sr, temps)
