@@ -71,14 +71,18 @@ def ebaucher(d):
 
 
 if __name__ == "__main__":
+    # DEMANDE : le fichier d'une demande, ou « * » pour toutes celles qui attendent (l'aiguillage les ébauche dès leur
+    # arrivée, sans attendre qu'une machine d'analyse se libère).
     voulue = os.environ.get("DEMANDE", "").strip()
-    f = S.RACINE / "demandes" / Path(voulue).name
-    if not voulue or not f.exists():
+    dossier = S.RACINE / "demandes"
+    fichiers = sorted(dossier.glob("*.json")) if voulue == "*" else [dossier / Path(voulue).name] if voulue else []
+    fichiers = [f for f in fichiers if f.exists()]
+    if not fichiers:
         print("Ébauche : pas de demande à traiter.", flush=True)
-        sys.exit(0)
-    d = json.loads(f.read_text(encoding="utf-8"))
-    print(f"== Ébauche : {d.get('artiste')} — {d.get('titre')}", flush=True)
-    try:
-        ebaucher(d)
-    except Exception as e:                                  # l'ébauche est un bonus : son échec ne gêne rien
-        print(f"  ébauche impossible : {type(e).__name__} {str(e)[:160]}", flush=True)
+    for f in fichiers:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            print(f"== Ébauche : {d.get('artiste')} — {d.get('titre')}", flush=True)
+            ebaucher(d)
+        except Exception as e:                              # l'ébauche est un bonus : son échec ne gêne rien
+            print(f"  ébauche impossible : {type(e).__name__} {str(e)[:160]}", flush=True)

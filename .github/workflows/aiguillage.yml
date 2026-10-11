@@ -32,10 +32,20 @@ jobs:
           token: ${{ secrets.JETON }}
           ref: main
           path: donnees
-          sparse-checkout: demandes
+          sparse-checkout: |
+            demandes
+            resultats/*.json
+          sparse-checkout-cone-mode: false
       - name: Répartir
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$DONNEES/demandes"
           python3 code/essai/aiguillage.py
+      # Chaque demande nouvelle reçoit tout de suite son ébauche (paroles publiées + grilles en ligne), sans attendre
+      # qu'une machine d'analyse se libère. Sans effet pour un titre qui a déjà une partition.
+      - name: Ébauches
+        env:
+          PUBLIER: "1"
+          DEMANDE: "*"
+        run: timeout 150 python3 -u code/essai/ebauche.py || true
