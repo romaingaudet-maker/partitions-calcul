@@ -493,6 +493,36 @@ def chroma_par_temps(y, sr, temps, accordage=0.0):
     return sortie / (np.linalg.norm(sortie, axis=1, keepdims=True) + 1e-9)
 
 
+def notes_fines(y, sr, temps):
+    """Notes jouées sur chaque temps, touche par touche (88 touches de piano, la0 = colonne 0), lues par un modèle
+    de transcription (Basic Pitch). Bien plus net que l'énergie par note : un do et un si voisins ne bavent pas
+    l'un sur l'autre. Sert à savoir si la note qui distingue deux lectures d'un accord est réellement jouée."""
+    import librosa
+    import onnxruntime as ort
+    if sr != 22050:
+        y = librosa.resample(np.asarray(y, np.float32), orig_sr=sr, target_sr=22050)
+    N, R = 43844, 7680                                                 # fenêtre du modèle, recouvrement (30 images)
+    pas = N - R
+    y = np.concatenate([np.zeros(R // 2, np.float32), np.asarray(y, np.float32)])
+    n = int(np.ceil(len(y) / pas))
+    y = np.concatenate([y, np.zeros(n * pas + R - len(y), np.float32)])
+    session = ort.InferenceSession(str(ICI / "modeles" / "notes.onnx"), providers=["CPUExecutionProvider"])
+    entree = session.get_inputs()[0].name
+    morceaux = []
+    for i in range(0, n, 16):
+        F = np.stack([y[k * pas:k * pas + N] for k in range(i, min(n, i + 16))])[:, :, None]
+        morceaux.append(session.run(["StatefulPartitionedCall:1"], {entree: F})[0][:, 15:-15])
+    A = np.concatenate(morceaux).reshape(-1, 88)                       # (images à 86 par seconde, 88)
+    temps = np.asarray(temps, float)
+    fins = np.append(temps[1:], temps[-1] + (np.median(np.diff(temps)) if len(temps) > 1 else 0.5))
+    sortie = np.zeros((len(temps), 88), np.float32)
+    for i in range(len(temps)):
+        a, b = int(temps[i] * 22050 / 256), max(int(fins[i] * 22050 / 256), int(temps[i] * 22050 / 256) + 1)
+        if a < len(A):
+            sortie[i] = A[a:b].mean(0)
+    return sortie
+
+
 def gabarits(ch, nettete=8.0):
     """Lecture d'accords sans modèle appris : chaque accord parfait est un gabarit (fondamentale, tierce, quinte)
     comparé aux notes entendues. Moteur simple, mais indépendant de BTC. Renvoie des log-probabilités (temps, 25)."""
@@ -1720,7 +1750,7 @@ def traiter(t):
         bilan["alertes"] = [a for a in bilan["alertes"] if not a.startswith("grilles en ligne")]     # canal facultatif : ses pannes ne sont pas des alertes
         print(f"  grilles en ligne : {r or 0} retenues pour comparaison", flush=True)
 
-    def garder_pour_le_banc(notes, pedale, parts_piste, hors_basse):
+    def garder_pour_le_banc(notes, pedale, parts_piste, hors_basse, y_piste):
         """Banc d'essai : pour les titres listés dans resultats/banc/titres.txt, les lectures intermédiaires (aucun son)
         sont gardées, afin d'essayer une autre façon de décider des accords en quelques secondes, sans refaire l'analyse.
         S'y ajoute une lecture de BTC sur la musique privée de sa basse, qui ne sert pour l'instant qu'au banc."""
@@ -1738,6 +1768,11 @@ def traiter(t):
             donnees["detail_sans_basse"] = e.astype(np.float32)
             donnees["btc_sans_basse"] = familles(e).astype(np.float32)
         donnees["detail"] = None if detail is None else detail.astype(np.float32)
+        try:                                                            # lecture fine des notes : accompagnement, puis basse seule
+            donnees["notes_fines"] = notes_fines(hors_basse, sr, temps)
+            donnees["basse_fine"] = notes_fines(y_piste, sr, temps)
+        except Exception:
+            traceback.print_exc()
         liste.parent.mkdir(parents=True, exist_ok=True)
         with open(liste.parent / (t["id"] + ".pickle"), "wb") as f:
             pickle.dump(donnees, f)
@@ -1802,7 +1837,7 @@ def traiter(t):
         print("  accords (retenus)       :", " ".join(nom_accord(a) or "-" for a in acc), flush=True)
         if y_piste_basse is not None:
             try:
-                garder_pour_le_banc(notes, pedale, parts_piste, hors_basse)
+                garder_pour_le_banc(notes, pedale, parts_piste, hors_basse, y_piste_basse)
             except Exception:
                 traceback.print_exc()
         for ligne in journal_basses[:120]:
