@@ -289,6 +289,9 @@ def noter_depart(d):
         bilans = []
     ancien = next((b for b in bilans if b.get("id") == ident), None)
     note = dict(ancien) if ancien and ancien.get("etat") == "ok" else {"id": ident, "artiste": artiste, "titre": titre, "complet": False, "etat": "en cours"}
+    note.pop("attente", None)                                  # un nouvel essai commence : l'attente notée n'est plus d'actualité
+    if isinstance(note.get("provisoire"), dict) and note["provisoire"].get("arret"):
+        note["provisoire"] = {k: v for k, v in note["provisoire"].items() if k != "arret"}
     note["analyse_debut"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     RESULTATS.mkdir(parents=True, exist_ok=True)
     C.noter_bilan(RESULTATS, note)
