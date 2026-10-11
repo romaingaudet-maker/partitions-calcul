@@ -205,6 +205,17 @@ def deja_complete(ident):
         return False
 
 
+def premiere_version(ident):
+    """Le bilan de la partition provisoire déjà écrite pour ce titre (sans ses mesures), ou None."""
+    try:
+        d = json.loads((RESULTATS / (ident + ".json")).read_text(encoding="utf-8"))
+        if d.get("etat") == "ok" and d.get("provisoire"):
+            return {k: v for k, v in d.items() if k != "mesures"}
+    except Exception:
+        pass
+    return None
+
+
 def publier(message):
     if os.environ.get("PUBLIER"):
         subprocess.run(["bash", str(ICI / "publier.sh"), message], check=False)
@@ -335,7 +346,18 @@ def main():
                 print(f"  ÉCHEC : {e}", flush=True)
             try:                                             # l'état est noté pour que la page puisse le dire
                 artiste, titre, ident = identite(d)
-                if not deja_complete(ident):
+                premiere = premiere_version(ident)
+                if premiere and not deja_complete(ident):
+                    # Une première version est déjà lisible (ébauche tirée des grilles en ligne) : elle reste affichée,
+                    # avec la mention de l'attente ou de l'arrêt, au lieu d'être remplacée par un message d'échec.
+                    premiere["alertes"] = [str(e)[:300]]
+                    if patiente:
+                        premiere["attente"] = {"tentatives": d["tentatives"], "dernier_essai": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                               "abandon_dans_h": round((ATTENTE_MAX - anciennete(d)) / 3600, 1)}
+                    else:
+                        premiere["provisoire"] = {**premiere["provisoire"], "arret": True}
+                    C.noter_bilan(RESULTATS, premiere)
+                elif not deja_complete(ident):
                     note = {"id": ident, "artiste": artiste, "titre": titre, "alertes": [str(e)[:300]]}
                     if patiente:
                         note.update(complet=False, etat="en attente", attente={
