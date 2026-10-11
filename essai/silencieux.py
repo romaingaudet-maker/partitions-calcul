@@ -90,11 +90,13 @@ def lancer(genre, video):
     return rep["job_id"], (int(reste) if str(reste or "").isdigit() else None)
 
 
-def attendre(taches, son_recu=None, limite=1200):
+def attendre(taches, son_recu=None, limite=1200, silence=240):
     """Suit plusieurs tâches en même temps. `son_recu` est appelée une fois, dès que l'analyse a dépassé le
     téléchargement de la vidéo : elle peut renvoyer une tâche de plus à suivre (les mots entendus).
+    Une tâche dont le service ne dit plus rien pendant `silence` secondes est tenue pour figée (une analyse normale
+    s'achève en deux minutes, sans jamais se taire plus d'une minute) : inutile d'attendre la limite entière.
     Renvoie ({genre: résultat ou None}, {genre: message d'erreur du service})."""
-    t0, resultats, messages, erreurs = time.time(), {}, {}, {}
+    t0, resultats, messages, erreurs, nouvelles = time.time(), {}, {}, {}, {}
     while len(resultats) < len(taches):
         time.sleep(5)
         for genre, tache in list(taches.items()):
@@ -105,6 +107,7 @@ def attendre(taches, son_recu=None, limite=1200):
             statut = str(etat.get("status", "")).lower()
             if etat.get("message") and etat["message"] != messages.get(genre):
                 messages[genre] = etat["message"]
+                nouvelles[genre] = time.time()
                 print(f"   {int(time.time() - t0):>3} s  {genre} : {messages[genre][:160]}", flush=True)
             if genre == "analyse" and son_recu and statut in EN_COURS and messages.get(genre) and "download" not in messages[genre].lower():
                 suite, son_recu = son_recu(), None
@@ -116,6 +119,9 @@ def attendre(taches, son_recu=None, limite=1200):
                 print(f"   {int(time.time() - t0):>3} s  {genre} : terminé", flush=True)
             elif code and statut not in EN_COURS:
                 erreurs[genre] = str(etat.get("message") or statut)
+                resultats[genre] = None
+            elif time.time() - nouvelles.setdefault(genre, time.time()) > silence:
+                erreurs[genre] = f"service figé (plus de nouvelles depuis {silence // 60} minutes)"
                 resultats[genre] = None
             elif time.time() - t0 > limite:
                 erreurs[genre] = f"pas de réponse en {limite // 60} minutes"
@@ -226,6 +232,11 @@ def traiter(d):
             print("  YouTube a demandé une connexion au service : nouvel essai dans 45 s", flush=True)
             time.sleep(45)                                   # ce refus est souvent passager
             continue
+        if essai == 1 and "figé" in raison and (reste is None or reste >= 2):
+            print("  le service s'est figé en cours d'analyse : nouvel essai", flush=True)
+            continue
+        if "figé" in raison or "pas de réponse" in raison:
+            raise RuntimeError("le service d'analyse est engorgé et n'a pas rendu sa lecture ; la demande sera retentée toute seule.")
         if "authentication" in raison.lower():
             raise RuntimeError("YouTube réclame une connexion pour laisser lire cette vidéo, le service n'a donc pas pu "
                                "la récupérer. Réessaie plus tard, ou dépose le fichier audio du titre.")
@@ -277,8 +288,9 @@ ATTENTE_MAX = 6 * 3600        # au-delà, la demande est abandonnée : le refus 
 
 
 def passager(e):
-    """Vrai pour un refus qui ne tient ni au titre ni à la demande : YouTube qui écarte le service, quota de l'heure."""
-    return any(x in str(e) for x in ("réclame une connexion", "quota d'analyses"))
+    """Vrai pour un refus qui ne tient ni au titre ni à la demande : YouTube qui écarte le service, quota de l'heure,
+    service engorgé qui se fige en cours d'analyse."""
+    return any(x in str(e) for x in ("réclame une connexion", "quota d'analyses", "service d'analyse est engorgé"))
 
 
 def anciennete(d):
