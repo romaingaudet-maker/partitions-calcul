@@ -688,7 +688,8 @@ def reinterpreter_sur_la_basse(chemin, L, parts, pos, tonalite, poids=1.0, marge
     ESSAI NON RETENU (banc d'essai, neuf titres) : sans effet. Les seconds choix des moteurs ne désignent pas le bon
     accord (il est en moyenne 4 points derrière, contre 8 pour un faux renversement, mais les accords non renversés
     sont vingt fois plus nombreux), et la règle de l'octave tirée des annotations donne partout l'avantage à l'état
-    fondamental. Gardé pour être rejoué quand la lecture des notes sera plus fine ; l'analyse ne l'appelle pas.
+    fondamental. Rejoué avec une lecture fine des notes (notes_fines, touche par touche) : toujours sans effet, voir
+    CHOIX.md. L'analyse ne l'appelle pas.
     Renvoie (chemin, nombre de plages réécrites)."""
     regle = regle_de_l_octave().get((tonalite or {}).get("mode", ""), {}) if tonalite else {}
     chemin, n, faits, i = chemin.copy(), len(chemin), 0, 0
@@ -1150,7 +1151,7 @@ def poser_basses(accords, parts, parts2=None, moteur=None, journal=None, fiable=
     return sortie, nb
 
 
-def caler_sur_le_premier_temps(accords, pos, longueur, journal=None):
+def caler_sur_le_premier_temps(accords, pos, longueur, journal=None, pedale=None, anticipe=True, milieu=(True, "pedale")):
     """Les accords changent normalement sur le premier temps de la mesure. Deux retouches (voir aussi plus bas, le
     changement entendu un temps trop tôt). Une mesure coupée en son milieu dont la
     première moitié prolonge exactement l'accord de la mesure précédente (même accord, même basse) n'est le plus
@@ -1158,7 +1159,10 @@ def caler_sur_le_premier_temps(accords, pos, longueur, journal=None):
     suivante commence par le nouvel accord, c'est lui qui arrivait trop tôt et l'ancien garde toute la mesure ;
     sinon le nouvel accord prend toute la mesure (il disparaîtrait autrement).
     Deux vrais accords dans une mesure (Mi puis Fa♯ après Do♯m, basse qui descend) ne sont pas touchés : leur première
-    moitié n'est pas l'accord d'avant."""
+    moitié n'est pas l'accord d'avant.
+    Ce second cas (le nouvel accord prend toute la mesure) n'est appliqué que sur une basse tenue (`pedale`), où les
+    moteurs suivent la basse et entendent le changement en retard. Ailleurs il effaçait de vrais accords d'une
+    demi-mesure : sur le banc d'essai (neuf titres annotés), le limiter ainsi rend 1,4 point de fondamentales justes."""
     cle = lambda a: None if a is None else (a[0], a[1], a[3] if len(a) > 3 else None)
     pos, sortie, n, faits, moitie = np.asarray(pos), list(accords), len(accords), 0, longueur // 2
     # Accord entendu un temps trop tôt : il commence sur le dernier temps d'une mesure et se prolonge dans la suivante
@@ -1166,7 +1170,7 @@ def caler_sur_le_premier_temps(accords, pos, longueur, journal=None):
     # Un accord de passage d'un seul temps (Solm7, Lam7 sur le 4e temps, puis Si♭M) n'est pas concerné : il ne dure pas.
     for d in np.flatnonzero(pos == 0):
         d = int(d)
-        if d < 2 or longueur < 3 or pos[d - 1] != longueur - 1 or pos[d - 2] != longueur - 2:
+        if not anticipe or d < 2 or longueur < 3 or pos[d - 1] != longueur - 1 or pos[d - 2] != longueur - 2:
             continue
         if sortie[d] is not None and sortie[d - 2] is not None and cle(sortie[d - 1]) == cle(sortie[d]) != cle(sortie[d - 2]) \
                 and (d + 1 >= n or cle(sortie[d + 1]) == cle(sortie[d])):
@@ -1185,8 +1189,12 @@ def caler_sur_le_premier_temps(accords, pos, longueur, journal=None):
             continue
         suivant = cle(sortie[d + longueur]) if d + longueur < n else None
         if suivant == B[0]:
+            if not milieu[0]:
+                continue
             sortie[d + moitie:d + longueur] = [sortie[d]] * moitie
         else:
+            if not milieu[1] or (milieu[1] == "pedale" and (pedale is None or not (np.asarray(pedale[d:d + longueur]) >= 0).all())):
+                continue
             sortie[d:d + moitie] = [sortie[d + moitie]] * moitie
         faits += 1
         if journal is not None:
@@ -1822,7 +1830,7 @@ def traiter(t):
             print(f"  basse ({'piste isolée' if parts_piste is not None else 'mélange'}) :", " ".join(
                 NOTES_MIXTES[int(v.argmax())] if v.max() >= 0.3 else "·" for v in parts), flush=True)
             acc, nb = poser_basses(acc, parts, parts2, basses_chordnet, journal_basses, fiable=parts_piste is not None)
-            acc, ramenes = caler_sur_le_premier_temps(acc, pos, longueur, journal_basses)
+            acc, ramenes = caler_sur_le_premier_temps(acc, pos, longueur, journal_basses, pedale=pedale)
             infos["changements_ramenes_sur_le_premier_temps"] = ramenes
             acc, tenues = pedale_au_dessus(acc, notes, pos, longueur, journal_basses)
             infos["pedales_au_dessus_de_la_basse"] = tenues
