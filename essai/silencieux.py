@@ -163,6 +163,23 @@ def esquisse(d, magic, entendus, duree, phrases=()):
         mots, bilan["position_extrait"] = C.caler_sur_transcription(lignes, entendus)
     except Exception as e:
         bilan["alertes"].append(f"paroles : {str(e)[:200] or type(e).__name__}")
+    # Les grilles publiées en ligne, accrochées aux paroles qu'on vient de placer et transposées dans le ton entendu :
+    # là où elles parlent (passages chantés), leurs accords remplacent ceux du service, moins sûrs.
+    if mots:
+        try:
+            import grilles as G
+            avec = []
+            G.chercher_grilles(artiste, titre, en_tout=40, avec_paroles=avec)
+            sur, infos = G.accords_sur_les_mots(avec, mots, temps, accords, C.lire_accord)
+            bilan["grilles_en_ligne_sur_les_mots"] = infos
+            if infos.get("retenues"):
+                accords = [(g[0], g[1], 0.6, g[2]) if g else a for g, a in zip(sur, accords)]
+                bilan["methodes"]["accords"] = "grilles en ligne calées sur les paroles, Magic Chords ailleurs"
+            print("  grilles accrochées aux mots :", {k: v for k, v in infos.items() if k != "detail"}, flush=True)
+            for g in infos.get("detail", []):
+                print("     ", g, flush=True)
+        except Exception as e:
+            print(f"  grilles en ligne : {type(e).__name__} {str(e)[:120]}", flush=True)
     sub = 4 if battue >= 0.6 else 2
     mesures = C.assembler(temps, num, accords, mots, sub)
     bilan.update({"tempo": round(60.0 / battue, 1), "temps_par_mesure": magic["metre"], "subdivision": sub,
@@ -228,11 +245,12 @@ def traiter(d):
           f"{len(entendus)} mots entendus", flush=True)
     if not magic:
         print("  esquisse impossible : le service n'a pas rendu de grille de temps", flush=True)
-    elif deja_complete(ident):
-        print("  esquisse non publiée : une partition achevée existe déjà, elle reste en place jusqu'à la nouvelle", flush=True)
     else:
         bilan, mesures = esquisse(d, magic, entendus, duree, C.lignes_de_whisper(res.get("mots")))
         bilan["durees_s"]["esquisse"] = round(time.time() - t0, 1)
+        if deja_complete(ident):
+            print("  esquisse non publiée : une partition achevée existe déjà, elle reste en place jusqu'à la nouvelle", flush=True)
+            return
         C.ecrire_partition(RESULTATS, bilan, mesures)
         publier(f"Esquisse : {artiste} - {titre}")
         print(f"  esquisse publiée après {int(time.time() - t0)} s : {len(mesures)} mesures, "

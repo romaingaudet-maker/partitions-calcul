@@ -1832,11 +1832,11 @@ def traiter(t):
             print("  premier temps de la mesure :", bilan["recoupement"]["mesures"], flush=True)
 
     journal_basses = []
-    grilles_en_ligne = []
+    grilles_en_ligne, grilles_avec_paroles = [], []
 
     def chercher_en_ligne():
         import grilles as G
-        for accords, origine in G.chercher_grilles(t["artiste"], t["titre"]):
+        for accords, origine in G.chercher_grilles(t["artiste"], t["titre"], avec_paroles=grilles_avec_paroles):
             lue = lire_grille(accords)
             if len(lue) >= 8:
                 grilles_en_ligne.append((lue, origine))
@@ -2081,6 +2081,21 @@ def traiter(t):
             mots = provisoires
             bilan["alertes"].append("mots placés d'après la transcription seulement (alignement indisponible)")
         noter_mots(mots)
+    # Les grilles en ligne accrochées aux mots placés : pour l'instant, on mesure seulement ce qu'elles valent face aux
+    # accords retenus (accord par grille, dans le bilan), avant de leur donner voix au chapitre.
+    if grilles_avec_paroles and mots:
+        try:
+            import grilles as G
+            from commun import lire_accord
+            sur, infos_g = G.accords_sur_les_mots(grilles_avec_paroles, mots, [float(x) for x in temps], accords, lire_accord)
+            communs = [i for i, a in enumerate(sur) if a is not None and accords[i] is not None]
+            infos_g["accord_de_la_majorite_avec_la_partition"] = round(sum(sur[i][0] == accords[i][0] for i in communs) / len(communs), 2) if communs else None
+            bilan["grilles_en_ligne_sur_les_mots"] = infos_g
+            print("  grilles accrochées aux mots :", {k: v for k, v in infos_g.items() if k != "detail"}, flush=True)
+            for g in infos_g.get("detail", []):
+                print("     ", g, flush=True)
+        except Exception:
+            traceback.print_exc()
     livrer(mots)
     return bilan
 
