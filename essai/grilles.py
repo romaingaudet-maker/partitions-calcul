@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cherche en ligne une grille d'accords du morceau, pour corroborer ce que l'analyse entend.
-Les sites de grilles publient leurs accords en texte : on interroge le moteur de recherche d'un tel site, on lit la
+Les sites de grilles publient leurs accords en texte : on interroge le moteur de recherche de quelques-uns, on lit la
 page du morceau et on n'en retient que les symboles d'accords, dans l'ordre. Ni paroles ni page ne sont gardées.
 Chaque site est interrogé en se présentant pour ce qu'on est, et seulement si son robots.txt l'admet ; un refus est
 accepté tel quel, sans détour. Ce canal est facultatif : chaque échec est silencieux, et c'est l'analyse qui décide
@@ -107,28 +107,81 @@ def pages_cifraclub(artiste, titre, nombre=2):
     return list(dict.fromkeys(sortie))[:nombre]
 
 
-def chercher_grilles(artiste, titre):
-    """Renvoie [(liste de symboles d'accords, site d'origine)] pour les pages où une grille a pu être lue."""
-    trouvees = []
-    try:
-        adresses = pages_cifraclub(artiste, titre)
-    except Exception as e:
-        print(f"    recherche refusée ou impossible : {type(e).__name__} {str(e)[:120]}", flush=True)
-        return trouvees
-    print(f"    {len(adresses)} pages proposées", flush=True)
-    for u in adresses:
-        hote = urllib.parse.urlparse(u).netloc
-        try:
-            if not admis(u):
-                print(f"      {hote} : lecture non admise", flush=True)
-                continue
-            accords = accords_de_la_page(_lire(u))
-        except Exception as e:
-            print(f"      {hote} : illisible ({type(e).__name__} {getattr(e, 'code', '')})", flush=True)
+def _court(titre):
+    return re.sub(r"\s*[\(\[].*?[\)\]]", "", titre).strip() or titre
+
+
+def pages_guitartabs(artiste, titre, nombre=2):
+    """Pages d'accords du morceau sur guitartabs.cc, d'après son moteur de recherche (versions « _crd »)."""
+    u = "https://www.guitartabs.cc/search.php?" + urllib.parse.urlencode({"tabtype": "chords", "band": artiste, "song": _court(titre)})
+    if not admis(u):
+        return []
+    voulu = limace(_court(titre), "")                                   # lettres seules : « l'aime » s'écrit l_aime ou laime
+    liens = re.findall(r'href=["\'](/tabs/[^"\'#?]+_crd(?:_ver_\d+)?\.html)["\']', _lire(u, 300_000))
+    bons = [l for l in dict.fromkeys(liens) if limace(l.rsplit("/", 1)[1].split("_crd")[0], "") == voulu]
+    return ["https://www.guitartabs.cc" + l for l in bons[:nombre]]
+
+
+def pages_guitaretab(artiste, titre, nombre=2):
+    """Pages d'accords du morceau sur guitaretab.com, d'après son moteur de recherche (liens dont le texte porte le titre)."""
+    u = "https://www.guitaretab.com/fetch/?" + urllib.parse.urlencode({"type": "tab", "query": f"{artiste} {_court(titre)}"})
+    if not admis(u):
+        return []
+    voulu, mots = _simple(titre), set(_simple(artiste).split())
+    sortie = []
+    for lien, texte in re.findall(r'(?is)<a\b[^>]*href=["\'](/[a-z0-9]/[^"\'#?/]+/\d+\.html)["\'][^>]*>(.*?)</a>', _lire(u, 300_000)):
+        t = _simple(html.unescape(re.sub(r"(?s)<[^>]+>", " ", texte)))
+        if not (mots & set(limace(lien.split("/")[2], " ").split())) or not t.startswith(voulu):
             continue
-        print(f"      {hote} : {len(accords)} accords lus" + (f" ({len(set(accords))} différents)" if accords else ""), flush=True)
-        if len(accords) >= 8 and len(set(accords)) >= 3:
-            trouvees.append((accords, hote))
+        reste = t[len(voulu):].split()
+        if any(x in reste for x in ("tab", "tabs", "bass", "solo", "intro", "ukulele", "drum", "power")):
+            continue                                                    # tablatures : pas de grille d'accords dedans
+        sortie.append("https://www.guitaretab.com" + lien)
+    return list(dict.fromkeys(sortie))[:nombre]
+
+
+def pages_acordesweb(artiste, titre, nombre=1):
+    """La page du morceau sur acordesweb.com, à son adresse directe (le site range ses pages par artiste et titre)."""
+    sans = lambda x: limace(re.sub(r"['’]", "", x))                     # « l'envie d'aimer » : l-envie-d-aimer ou lenvie-daimer
+    return list(dict.fromkeys(f"https://acordesweb.com/cancion/{f(artiste)}/{f(_court(titre))}" for f in (limace, sans)))
+
+
+SITES = (("cifraclub", pages_cifraclub), ("guitartabs", pages_guitartabs), ("guitaretab", pages_guitaretab), ("acordesweb", pages_acordesweb))
+
+
+def chercher_grilles(artiste, titre, en_tout=75):
+    """Renvoie [(liste de symboles d'accords, site d'origine)] pour les pages où une grille a pu être lue.
+    Plusieurs sites sont interrogés tour à tour (ceux dont les règles l'admettent, voir CHOIX.md) ; l'ensemble est
+    borné à `en_tout` secondes, et la panne ou le refus d'un site n'empêche pas les autres."""
+    trouvees, fin = [], time.monotonic() + en_tout
+    for nom, pages in SITES:
+        if time.monotonic() > fin:
+            break
+        try:
+            adresses = pages(artiste, titre)
+        except Exception as e:
+            print(f"    {nom} : recherche refusée ou impossible ({type(e).__name__} {str(getattr(e, 'code', '') or e)[:60]})", flush=True)
+            continue
+        print(f"    {nom} : {len(adresses)} pages proposées", flush=True)
+        for u in adresses:
+            hote = urllib.parse.urlparse(u).netloc
+            if time.monotonic() > fin:
+                break
+            try:
+                if not admis(u):
+                    print(f"      {hote} : lecture non admise", flush=True)
+                    continue
+                accords = accords_de_la_page(_lire(u))
+            except urllib.error.HTTPError as e:
+                if e.code != 404:                                       # 404 : le site n'a pas ce morceau, rien à signaler
+                    print(f"      {hote} : illisible (HTTPError {e.code})", flush=True)
+                continue
+            except Exception as e:
+                print(f"      {hote} : illisible ({type(e).__name__} {getattr(e, 'code', '')})", flush=True)
+                continue
+            print(f"      {hote} : {len(accords)} accords lus" + (f" ({len(set(accords))} différents)" if accords else ""), flush=True)
+            if len(accords) >= 8 and len(set(accords)) >= 3:
+                trouvees.append((accords, hote))
     return trouvees
 
 
