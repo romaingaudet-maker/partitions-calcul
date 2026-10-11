@@ -727,6 +727,59 @@ def reinterpreter_sur_la_basse(chemin, L, parts, pos, tonalite, poids=1.0, marge
     return chemin, faits
 
 
+ENSEMBLE = dict(wb=0.5, cb=1.0, cpas=0.2, p3=0.8, p5=0.8, p7=0.8, px=1.5)       # réglé sur le banc d'essai (neuf titres annotés)
+
+
+def chemin_et_basse(L, parts, pos, longueur, pedale=None, wb=0.5, cb=1.0, cpas=0.2, p3=0.8, p5=0.8, p7=0.8, px=1.5, wp=0.0, plancher=0.02):
+    """Décide l'accord et la basse ensemble, au lieu de choisir l'accord puis de poser la basse. On cherche la
+    meilleure suite de couples (accord parfait, note de basse) :
+    - L ((temps, 25)) dit ce que valent les accords, `parts` ((temps, 12), basse isolée) ce que joue la basse (poids wb) ;
+    - une basse autre que la fondamentale a un prix selon sa place : tierce (p3), quinte (p5), septième (p7), note
+      étrangère (px) ;
+    - changer d'accord coûte comme d'habitude (COUT_CHANGEMENT) ; garder l'accord pendant que la basse bouge coûte
+      moins (cb, ou cpas si elle avance par degrés conjoints) : Do, Do/Si, La m plutôt que Do, Mi m, La m.
+    Un accord renversé n'est ainsi plus pris pour l'accord de sa basse dès que son voisin le soutient.
+    Sur une basse tenue (`pedale` : note tenue sur chaque temps, ou -1), n'importe quel accord peut passer au-dessus
+    (Do m, La♭/Do, Si♭/Do) : la note tenue n'a alors plus de prix, quelle que soit sa place dans l'accord, et reçoit
+    l'avantage wp.
+    Renvoie (accord par temps (0-24), basse par temps (0-11, ou -1 quand c'est la fondamentale ou qu'il n'y a pas d'accord))."""
+    pos = np.asarray(pos)
+    n = len(pos)
+    lb = np.log(np.maximum(np.asarray(parts, float), plancher))
+    f, b = np.repeat(np.arange(24), 12), np.tile(np.arange(12), 24)     # 288 états, plus « pas d'accord »
+    r, mineur = f // 2, f % 2
+    inter = (b - r) % 12
+    prix = np.where(inter == 0, 0.0, np.where(inter == np.where(mineur, 3, 4), -p3, np.where(inter == 7, -p5,
+                    np.where((inter == 10) | (inter == 11), -p7, -px))))
+    S = 289
+    autre_accord = np.ones((S, S))
+    autre_accord[:288, :288] = f[:, None] != f[None, :]
+    np.fill_diagonal(autre_accord, 0)
+    ecart = np.abs((b[:, None] - b[None, :] + 6) % 12 - 6)
+    mouvement = np.zeros((S, S))
+    mouvement[:288, :288] = np.where(ecart == 0, 0.0, np.where(ecart <= 2, cpas, cb)) * (f[:, None] == f[None, :])
+    E = np.empty((n, S))
+    E[:, :288] = L[:, f] + wb * lb[:, b] + prix
+    if pedale is not None:
+        for t in np.flatnonzero(np.asarray(pedale) >= 0):
+            tenue = b == int(pedale[t])
+            E[t, :288][tenue] += wp - prix[tenue]
+    E[:, 288] = L[:, 24] + wb * np.log(1 / 12)
+    score, retour = E[0].copy(), np.zeros((n, S), int)
+    for t in range(1, n):
+        c = COUT_CHANGEMENT[0] if pos[t] == 0 else COUT_CHANGEMENT[1] if (longueur % 2 == 0 and pos[t] == longueur // 2) else COUT_CHANGEMENT[2]
+        M = score[:, None] - c * autre_accord - mouvement
+        retour[t] = M.argmax(0)
+        score = M.max(0) + E[t]
+    etats = np.empty(n, int)
+    etats[-1] = int(score.argmax())
+    for t in range(n - 1, 0, -1):
+        etats[t - 1] = retour[t, etats[t]]
+    chemin = np.where(etats == 288, 24, f[np.minimum(etats, 287)])
+    basses = np.where((etats == 288) | (b[np.minimum(etats, 287)] == r[np.minimum(etats, 287)]), -1, b[np.minimum(etats, 287)])
+    return chemin, basses
+
+
 def familles_de_la_gamme(tonalite):
     """Les six accords parfaits d'une gamme (I ii iii IV V vi), plus le V majeur du relatif mineur."""
     T = (tonalite["tonique"] + (3 if tonalite["mode"] == "mineur" else 0)) % 12       # tonique du ton majeur
@@ -853,7 +906,7 @@ def arbitrage_par_les_notes(lectures, notes, pos, autres=(), variantes=None, ped
 
 
 def recouper_accords(lectures, pos, longueur, detail=None, couleurs=None, pedale=None, journal=None,
-                     notes=None, tonalite_externe=None, grille=None, basse=None, relire=None):
+                     notes=None, tonalite_externe=None, grille=None, basse=None, ensemble=None):
     """Un accord par temps, par recoupement de plusieurs lectures.
     lectures : {moteur: (log-probabilités (temps, 25), temps renseignés ou None)}.
     Les lectures sont additionnées (chacune avec son poids), puis on cherche la meilleure suite d'accords sachant
@@ -907,7 +960,7 @@ def recouper_accords(lectures, pos, longueur, detail=None, couleurs=None, pedale
         return chemin
 
     chemin = chemin_de(L)
-    canaux, reprises_infos, conteste = {}, None, None
+    canaux, reprises_infos, conteste, basses_ensemble = {}, None, None, None
     nom_f = lambda c: "-" if c >= 24 else nom_accord((int(c) // 2, "min" if c % 2 else "maj"))
     try:
         # 1. Les reprises : là où les moteurs se contredisent, les autres passages de la même grille proposent leur lecture.
@@ -964,9 +1017,10 @@ def recouper_accords(lectures, pos, longueur, detail=None, couleurs=None, pedale
             else:
                 canaux["grille_en_ligne"] = f"{len(grille)} lues, aucune ne ressemble assez à ce qu'on entend"
         chemin = chemin_de(L)
-        if basse is not None and relire is not False:            # accords renversés pris pour l'accord de leur basse
-            chemin, relus = reinterpreter_sur_la_basse(chemin, L, basse, pos, ici or tonalite_externe, journal=journal, **(relire or {}))
-            canaux["accords_relus_sur_leur_basse"] = relus
+        if basse is not None and ensemble is not False:          # l'accord et la basse sont décidés ensemble
+            seul = chemin
+            chemin, basses_ensemble = chemin_et_basse(L, basse, pos, longueur, pedale=pedale, **{**ENSEMBLE, **(ensemble or {})})
+            canaux["temps_changes_par_la_decision_avec_la_basse"] = int((seul != chemin).sum())
         canaux["temps_changes_par_les_canaux"] = int((depart != chemin).sum())
         if journal is not None and (depart != chemin).any():
             journal.append("canaux : " + ", ".join(f"temps {int(i)} {nom_f(depart[i])}→{nom_f(chemin[i])}" for i in np.flatnonzero(depart != chemin)[:80]))
@@ -1031,6 +1085,10 @@ def recouper_accords(lectures, pos, longueur, detail=None, couleurs=None, pedale
         infos["reprises"] = reprises_infos
     if canaux:
         infos["canaux"] = canaux
+    if basses_ensemble is not None:
+        # la basse suit son accord : si l'accord a été réécrit depuis (majeur/mineur aligné), elle reste ; une basse qui
+        # se retrouve fondamentale n'est plus un renversement
+        infos["basses"] = [int(x) if x >= 0 and resultat[i] is not None and x != resultat[i][0] else -1 for i, x in enumerate(basses_ensemble)]
     seuls = {k: v for k, v in lectures.items() if k.startswith("btc")}
     if seuls and len(seuls) < len(lectures):                           # ce que le recoupement a changé par rapport à BTC seul
         infos["temps_changes_par_recoupement"] = round(float((chemin_de(
@@ -1147,6 +1205,36 @@ def poser_basses(accords, parts, parts2=None, moteur=None, journal=None, fiable=
                 if force >= 0.3:
                     tenue = note
                 a = z
+        i = j
+    return sortie, nb
+
+
+def ecrire_basses(accords, basses, pos=None, longueur=4, journal=None, mini="ligne"):
+    """Écrit sur les accords les basses décidées avec eux (voir chemin_et_basse). Une basse de moins de `mini` temps
+    est laissée de côté (mini « ligne », l'usage : une basse d'un seul temps est une note de passage, sauf si elle
+    fait partie d'une ligne de basse, le temps voisin portant lui aussi une basse sous le même accord ; mini « fort » : une basse d'un seul temps n'est gardée que sur un temps fort, le premier ou
+    le milieu de la mesure ; ailleurs c'est une note de passage). Quand la basse tient la septième d'un accord de septième, on écrit l'accord simple sur sa
+    basse (Sol/Fa plutôt que Sol7) : c'est la basse qui apportait cette septième.
+    Renvoie (accords : (fondamentale, qualité, confiance, basse ou None), nombre de renversements)."""
+    n, sortie, nb, i = len(accords), [None if a is None else (*a[:3], None) for a in accords], 0, 0
+    while i < n:
+        j = i
+        while j < n and basses[j] == basses[i] and (accords[j][:2] if accords[j] else None) == (accords[i][:2] if accords[i] else None):
+            j += 1
+        note = int(basses[i])
+        fort = (mini == "ligne" and j - i >= 2) or (pos is not None and mini == "fort" and (
+            j - i >= 2 or pos[i] == 0 or (longueur % 2 == 0 and pos[i] == longueur // 2)))
+        # une ligne de basse : le temps d'avant ou d'après porte lui aussi une basse hors fondamentale sous le même accord
+        ligne = mini == "ligne" and accords[i] is not None and any(
+            0 <= x < n and basses[x] >= 0 and accords[x] is not None and accords[x][:2] == accords[i][:2] for x in (i - 1, j))
+        if note >= 0 and accords[i] is not None and (fort or ligne or (mini not in ("fort", "ligne") and j - i >= mini)):
+            r, q = accords[i][:2]
+            q2 = {"7": "maj", "min7": "min"}.get(q, q) if note == (r + 10) % 12 else "maj" if (q == "maj7" and note == (r + 11) % 12) else q
+            for x in range(i, j):
+                sortie[x] = (r, q2, accords[x][2], note)
+            nb += 1
+            if journal is not None:
+                journal.append(f"{nom_accord((r, q2, 0, note))} sur {j - i} temps (accord et basse décidés ensemble)")
         i = j
     return sortie, nb
 
@@ -1808,8 +1896,11 @@ def traiter(t):
             notes = chroma_par_temps(hors_basse, sr, temps, accordage)
         except Exception:
             traceback.print_exc()
+        # Avec la basse isolée, l'accord et la basse sont décidés ensemble (voir chemin_et_basse).
         acc, infos = recouper_accords(lectures, pos, longueur, detail, couleurs, pedale, journal_couleurs,
-                                      notes=notes, tonalite_externe=(magic or {}).get("tonalite"), grille=grilles_en_ligne)
+                                      notes=notes, tonalite_externe=(magic or {}).get("tonalite"), grille=grilles_en_ligne,
+                                      basse=parts_piste)
+        basses_ensemble = infos.pop("basses", None)
         infos["couleurs_retirees"] = sum(1 for l in journal_couleurs if "BTC seul" in l)
         infos["modes_alignes"] = sum(1 for l in journal_couleurs if "écriture habituelle" in l)
         bilan["recoupement"]["accords"] = infos
@@ -1829,7 +1920,14 @@ def traiter(t):
                 parts2 = basse_par_temps(y_basse2, sr, temps, accordage) if y_basse2 is not None else None
             print(f"  basse ({'piste isolée' if parts_piste is not None else 'mélange'}) :", " ".join(
                 NOTES_MIXTES[int(v.argmax())] if v.max() >= 0.3 else "·" for v in parts), flush=True)
-            acc, nb = poser_basses(acc, parts, parts2, basses_chordnet, journal_basses, fiable=parts_piste is not None)
+            if basses_ensemble is not None:
+                # les basses décidées avec les accords d'abord ; l'ancienne pose complète là où rien n'est écrit (pédales)
+                ensemble, nb = ecrire_basses(acc, basses_ensemble, pos, longueur, journal_basses)
+                anciennes, nb2 = poser_basses(acc, parts, parts2, basses_chordnet, journal_basses, fiable=True)
+                acc = [a if a is None or a[3] is not None else b for a, b in zip(ensemble, anciennes)]
+                nb = sum(1 for i, a in enumerate(acc) if a is not None and a[3] is not None and (i == 0 or acc[i - 1] != a))
+            else:
+                acc, nb = poser_basses(acc, parts, parts2, basses_chordnet, journal_basses, fiable=parts_piste is not None)
             acc, ramenes = caler_sur_le_premier_temps(acc, pos, longueur, journal_basses, pedale=pedale)
             infos["changements_ramenes_sur_le_premier_temps"] = ramenes
             acc, tenues = pedale_au_dessus(acc, notes, pos, longueur, journal_basses)
