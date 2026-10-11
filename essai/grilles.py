@@ -140,21 +140,18 @@ def lignes_avec_accords(page):
     return sortie
 
 
-def accords_sur_les_mots(pages, mots, temps, entendus=None, lire=None):
-    """Recoupe les grilles trouvées en ligne avec ce que l'analyse sait déjà : où tombe chaque mot, et (si on l'a)
-    quel accord elle entend sur chaque temps.
+def accrocher_aux_mots(pages, mots, temps, lire):
+    """Accroche chaque grille aux paroles placées : même suite de mots, donc même instant (un refrain écrit une seule
+    fois sur la page est retrouvé à chacune de ses reprises).
     pages : [(lignes_avec_accords(page), origine)] ; mots : [(début, fin, mot, confiance, n° de ligne)] ; temps : instants
-    des temps ; entendus : par temps, (fondamentale, qualité, …) ou None ; lire : symbole -> (fondamentale, qualité, basse).
-    Chaque grille est accrochée aux paroles de l'analyse (même suite de mots), ce qui donne un instant à ses accords ;
-    elle est transposée dans le ton où elle s'accorde le mieux avec ce qu'on entend, et écartée si elle ne s'y accorde
-    pas. Là où plusieurs grilles parlent, la majorité l'emporte.
-    Renvoie (par temps : (fondamentale, qualité, basse) ou None hors des passages chantés couverts, infos)."""
+    des temps ; lire : symbole -> (fondamentale, qualité, basse).
+    Renvoie [(par temps : accord ou None hors des passages chantés couverts, origine, nombre d'accords placés)]."""
     import difflib
     n = len(temps)
     nus = [(_nu(m[2]), m[0], m[4]) for m in sorted(mots, key=lambda m: m[0])]
     nus = [x for x in nus if x[0]]
     if not nus or not pages or n < 8:
-        return [None] * n, {"grilles": len(pages), "retenues": 0}
+        return []
     par_ligne = {}
     for k, (_, _, j) in enumerate(nus):
         par_ligne.setdefault(j, []).append(k)
@@ -212,7 +209,17 @@ def accords_sur_les_mots(pages, mots, temps, entendus=None, lire=None):
             for i in range(a, max(b, a + 1)):
                 sur[i] = place[k]
         candidates.append((sur, origine, len(place)))
-    # 4. le ton : chaque grille est transposée là où elle s'accorde le mieux avec ce qu'on entend
+    return candidates
+
+
+MINEURES = ("min", "min7", "min6", "minmaj7", "dim", "dim7", "hdim7")
+
+
+def recouper(candidates, n, entendus=None, seuil=0.45):
+    """Transpose chaque grille accrochée dans le ton où elle s'accorde le mieux avec `entendus` (par temps :
+    (fondamentale, qualité, …) ou None), l'écarte si elle ne s'y accorde pas, puis fait voter les grilles temps par
+    temps (chacune pèse ce qu'elle s'accorde). Sans `entendus`, toutes sont gardées telles quelles.
+    Renvoie (par temps : (fondamentale, qualité, basse) ou None, infos)."""
     retenues, infos = [], []
     for sur, origine, nb in candidates:
         couverts = [i for i in range(n) if sur[i] is not None]
@@ -224,21 +231,59 @@ def accords_sur_les_mots(pages, mots, temps, entendus=None, lire=None):
                 accord = juste / len(communs)
         infos.append({"origine": origine, "accords_places": nb, "temps_couverts": len(couverts), "transposition_demi_tons": d,
                       "accord_avec_l_ecoute": None if accord is None else round(accord, 2)})
-        if accord is None or accord >= 0.45:
+        if accord is None or accord >= seuil:
             retenues.append(([None if a is None else ((a[0] + d) % 12, a[1], None if a[2] is None else (a[2] + d) % 12) for a in sur],
                              accord or 0.5))
-    # 5. la majorité, temps par temps (chaque grille pèse ce qu'elle s'accorde avec l'écoute)
     sortie = [None] * n
     for i in range(n):
         voix = {}
         for sur, poids in retenues:
             if sur[i] is not None:
-                fam = (sur[i][0], sur[i][1] in ("min", "min7", "min6", "minmaj7", "dim", "dim7", "hdim7"))
-                voix.setdefault(fam, [0.0, sur[i]])[0] += poids
+                voix.setdefault((sur[i][0], sur[i][1] in MINEURES), [0.0, sur[i]])[0] += poids
         if voix:
             sortie[i] = max(voix.values(), key=lambda v: v[0])[1]
-    return sortie, {"grilles": len(pages), "accrochees_aux_paroles": len(candidates), "retenues": len(retenues),
+    return sortie, {"accrochees_aux_paroles": len(candidates), "retenues": len(retenues),
                     "temps_couverts": sum(a is not None for a in sortie), "detail": infos}
+
+
+def accords_sur_les_mots(pages, mots, temps, entendus=None, lire=None):
+    """Recoupe les grilles trouvées en ligne avec ce que l'analyse sait déjà : où tombe chaque mot (accrocher_aux_mots)
+    et quel accord elle entend sur chaque temps (recouper). Renvoie (accords par temps ou None, infos)."""
+    sortie, infos = recouper(accrocher_aux_mots(pages, mots, temps, lire), len(temps), entendus)
+    return sortie, {"grilles": len(pages), **infos}
+
+
+def recouper_entre_elles(candidates, n):
+    """Avant toute écoute : les grilles se recoupent entre elles. Celle avec laquelle les autres s'accordent le plus sans
+    transposition donne le ton (la plupart des pages sont dans le ton du disque ; une version avec capodastre est seule
+    dans le sien) ; les autres y sont transposées, et la majorité l'emporte temps par temps.
+    Renvoie (accords par temps ou None, infos)."""
+    if not candidates:
+        return [None] * n, {"accrochees_aux_paroles": 0, "retenues": 0}
+    def entente(a, b):
+        communs = [i for i in range(n) if a[i] is not None and b[i] is not None]
+        return sum(a[i][0] == b[i][0] for i in communs) / len(communs) if len(communs) >= 12 else 0.0
+    notes = [sum(entente(a[0], b[0]) for b in candidates if b is not a) for a in candidates]
+    k = max(range(len(candidates)), key=lambda x: (round(notes[x], 2), candidates[x][2]))
+    sortie, infos = recouper(candidates, n, candidates[k][0], seuil=0.5)
+    infos["reference"] = candidates[k][1]
+    return sortie, infos
+
+
+def tonalite_de(accords):
+    """Tonalité la plus simple qui explique des accords ((fondamentale, qualité, …) ou None) : la gamme majeure qui en
+    contient le plus, majeure ou mineure selon que son premier ou son sixième degré revient le plus. None si trop peu."""
+    compte = {}
+    for a in accords:
+        if a is not None:
+            f = (a[0] % 12, a[1] in MINEURES)
+            compte[f] = compte.get(f, 0) + 1
+    if sum(compte.values()) < 8:
+        return None
+    gamme = lambda t: [(t, False), ((t + 5) % 12, False), ((t + 7) % 12, False), ((t + 2) % 12, True), ((t + 4) % 12, True), ((t + 9) % 12, True)]
+    t = max(range(12), key=lambda t: sum(compte.get(f, 0) for f in gamme(t)) + 0.5 * compte.get((t, False), 0))
+    mineur = compte.get(((t + 9) % 12, True), 0) > compte.get((t, False), 0)
+    return {"tonique": (t + 9) % 12 if mineur else t, "mode": "mineur" if mineur else "majeur"}
 
 
 def _simple(s):

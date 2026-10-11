@@ -40,6 +40,16 @@ jobs:
           ref: main
           path: donnees
 
+      # Avant toute installation : une ébauche tirée des paroles publiées et des grilles en ligne, en quelques secondes
+      # (ebauche.py n'a besoin d'aucun module). Les étapes suivantes la remplacent.
+      - name: Ébauche
+        env:
+          PUBLIER: "1"
+          DEMANDE: ${{ inputs.demande }}
+        run: |
+          mkdir -p "$DONNEES/resultats" "$RUNNER_TEMP/journaux"
+          timeout 90 python3 -u code/essai/ebauche.py 2>&1 | tee "$RUNNER_TEMP/journaux/journal-ebauche.txt" || true
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
