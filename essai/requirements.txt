@@ -1,0 +1,9 @@
+yt-dlp[default]
+numpy
+librosa>=0.10
+soundfile
+demucs==4.0.1
+beat_this @ https://github.com/CPJKU/beat_this/archive/main.zip
+audio-separator[cpu]
+pyyaml
+lv-chordia

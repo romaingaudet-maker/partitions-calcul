@@ -1,0 +1,43 @@
+name: Relance des demandes en attente
+
+# Quand le service ne parvient pas à lire une vidéo (YouTube l'écarte par moments), la demande reste en place.
+# Cette relance rappelle l'aiguillage toutes les 15 minutes. Elle s'éteint d'elle-même quand plus rien n'attend,
+# et l'analyse la rallume quand une demande est mise en attente : hors de ces périodes, elle ne tourne pas.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  DONNEES: ${{ github.workspace }}/donnees
+  GH_REPO: ${{ github.repository }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  relance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code
+      - name: Demandes
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DEPOT_DONNEES || 'romaingaudet-maker/partitions-' }}
+          token: ${{ secrets.JETON }}
+          ref: main
+          path: donnees
+          sparse-checkout: demandes
+      - run: |
+          if ls "$DONNEES"/demandes/*.json >/dev/null 2>&1; then
+            echo "Des demandes attendent : nouvelle tentative."
+            python3 code/essai/aiguillage.py
+          else
+            echo "Plus rien n'attend : la relance s'éteint."
+            gh workflow disable relance.yml
+          fi

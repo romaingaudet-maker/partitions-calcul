@@ -1,0 +1,41 @@
+name: Aiguillage des demandes
+
+# Répartit les demandes d'analyse : une machine par demande, quatre à la fois au plus (essai/aiguillage.py).
+# Lancé par le dépôt des données quand une demande arrive, et par chaque analyse qui se termine.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: aiguillage
+  cancel-in-progress: false      # un seul aiguillage à la fois ; celui qui attend verra toutes les demandes
+
+env:
+  DONNEES: ${{ github.workspace }}/donnees
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  aiguillage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code
+      - name: Demandes
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DEPOT_DONNEES || 'romaingaudet-maker/partitions-' }}
+          token: ${{ secrets.JETON }}
+          ref: main
+          path: donnees
+          sparse-checkout: demandes
+      - name: Répartir
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$DONNEES/demandes"
+          python3 code/essai/aiguillage.py
