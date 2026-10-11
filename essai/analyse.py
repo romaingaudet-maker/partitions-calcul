@@ -1754,7 +1754,7 @@ def traiter(t):
         """Banc d'essai : pour les titres listés dans resultats/banc/titres.txt, les lectures intermédiaires (aucun son)
         sont gardées, afin d'essayer une autre façon de décider des accords en quelques secondes, sans refaire l'analyse.
         S'y ajoute une lecture de BTC sur la musique privée de sa basse, qui ne sert pour l'instant qu'au banc."""
-        liste = Path("resultats/banc/titres.txt")
+        liste = RACINE / "resultats" / "banc" / "titres.txt"
         if not liste.exists() or t["id"] not in liste.read_text(encoding="utf-8").split():
             return
         import pickle
