@@ -570,6 +570,7 @@ def couleurs_segments(segments, temps):
 
 POIDS_MOTEURS = {"btc_mix": 1.0, "btc_sans_voix": 1.0, "chordnet": 1.0, "magic_chords": 0.7, "gabarits": 0.5, "sans_basse": 0.0}
 COUT_CHANGEMENT = (0.4, 1.2, 2.5)     # prix d'un changement d'accord : sur un premier temps, au milieu de la mesure, ailleurs
+PRIME_GRILLE = 0.8                    # avantage des accords de la grille en ligne retenue, handicap des autres (banc : neutre de 0,4 à 2)
 POIDS_SUR_PEDALE = 0.25     # poids d'un moteur qui lit l'accord de la note tenue par la basse (réglé sur le banc d'essai : à 0,5, Fa♯/Si et Mi/Si se perdaient)
 
 
@@ -1008,8 +1009,8 @@ def recouper_accords(lectures, pos, longueur, detail=None, couleurs=None, pedale
             calees = [(c, o) for c, o in calees if c]
             if calees:
                 calee, origine = max(calees, key=lambda x: min(x[0][2], x[0][3]))
-                prime = np.full(25, -0.4)
-                prime[list(calee[0])], prime[24] = 0.4, 0.0
+                prime = np.full(25, -PRIME_GRILLE)
+                prime[list(calee[0])], prime[24] = PRIME_GRILLE, 0.0
                 L = L + prime
                 canaux["grille_en_ligne"] = {"origine": origine, "accords": len(calee[0]), "transposition_demi_tons": calee[1],
                                              "part_couverte": round(calee[2], 2), "part_de_ses_accords_entendus": round(calee[3], 2),
