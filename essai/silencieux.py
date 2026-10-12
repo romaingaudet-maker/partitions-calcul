@@ -288,7 +288,8 @@ def noter_depart(d):
     except Exception:
         bilans = []
     ancien = next((b for b in bilans if b.get("id") == ident), None)
-    note = dict(ancien) if ancien and ancien.get("etat") == "ok" else {"id": ident, "artiste": artiste, "titre": titre, "complet": False, "etat": "en cours"}
+    garde = ancien and ancien.get("etat") == "ok" and (RESULTATS / (ident + ".json")).exists()     # partition effacée : on repart de zéro
+    note = dict(ancien) if garde else {"id": ident, "artiste": artiste, "titre": titre, "complet": False, "etat": "en cours"}
     note.pop("attente", None)                                  # un nouvel essai commence : l'attente notée n'est plus d'actualité
     if isinstance(note.get("provisoire"), dict) and note["provisoire"].get("arret"):
         note["provisoire"] = {k: v for k, v in note["provisoire"].items() if k != "arret"}
