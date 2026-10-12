@@ -421,7 +421,48 @@ def variantes(pages, mots, temps, accords, lire):
     majorite, _ = recouper(cands, n, accords, seuil=0.0)
     if len(cands) > 1:
         sortie.insert(0, suite(majorite, "majorité des grilles"))
-    return sortie
+    return sans_doublons(sortie, accords)
+
+
+def sans_doublons(variantes, accords=None):
+    """Retire les grilles identiques une fois remises dans le ton du morceau : même accord tenu sur chacun des temps
+    qu'elles couvrent (ce que notre analyse comble ne compte pas). La première gardée porte le nom de toutes ; une
+    grille qui ne dit rien d'autre que notre analyse disparaît, elle n'apporterait rien au choix."""
+    n = max([len(accords or [])] + [c[0] + 1 for v in variantes for c in v["changements"]])
+    def tenus(v):                                                   # par temps : accord tenu, ou None si comblé
+        par, courant, comble, ch = [None] * n, None, True, {c[0]: c for c in v["changements"]}
+        for i in range(n):
+            c = ch.get(i)
+            if c is not None:
+                courant, comble = (c[1], c[2], c[3]), len(c) > 4 and bool(c[4])
+            par[i] = None if comble else courant
+        return tuple(par)
+    notre, courant = [], None
+    for a in (accords or []):
+        if a is not None:
+            courant = (int(a[0]), a[1], -1 if len(a) <= 3 or a[3] is None else int(a[3]))
+        notre.append(courant)
+    gardees, par_cle = [], {}
+    for v in variantes:
+        k = tenus(v)
+        couverts = [i for i, x in enumerate(k) if x is not None]
+        if not couverts:
+            continue
+        if notre and all(i < len(notre) and notre[i] == k[i] for i in couverts):
+            continue
+        if k in par_cle:
+            par_cle[k]["sites"].append(v["nom"])
+            continue
+        v = {**v, "sites": [v["nom"]]}
+        par_cle[k] = v
+        gardees.append(v)
+    for v in gardees:                                               # « majorité des grilles : a, b » ou « a, b »
+        sites = v.pop("sites")
+        if len(sites) > 1:
+            maj = [x for x in sites if x.startswith("majorité")]
+            autres = [x for x in sites if not x.startswith("majorité")]
+            v["nom"] = (maj[0] + " : " if maj else "") + ", ".join(autres)
+    return gardees
 
 
 SITES = (("cifraclub", pages_cifraclub), ("guitartabs", pages_guitartabs), ("guitaretab", pages_guitaretab), ("acordesweb", pages_acordesweb),

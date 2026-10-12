@@ -108,7 +108,17 @@ def main():
             p = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if "mesures" not in p or ("variantes_accords" in p and not tous and not voulus):
+        if "mesures" not in p:
+            continue
+        if p.get("variantes_accords") and not tous and not voulus:
+            # Déjà pourvue : on retire seulement les grilles en double (calcul local, aucun site relu).
+            _, accords, _ = depuis_la_partition(p)
+            v = G.sans_doublons(json.loads(json.dumps(p["variantes_accords"])), accords)
+            if v != p["variantes_accords"]:
+                print(f"== {p.get('artiste')} — {p.get('titre')} : {len(p['variantes_accords'])} → {len(v)} grilles (doublons retirés)", flush=True)
+                faits[p["id"]] = (empreinte(f), v)
+            continue
+        if "variantes_accords" in p and not tous and not voulus:
             continue
         emp = empreinte(f)
         print(f"== {p.get('artiste')} — {p.get('titre')}", flush=True)
