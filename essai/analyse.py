@@ -2142,6 +2142,7 @@ def traiter(t):
             import grilles as G
             from commun import lire_accord
             sur, infos_g = G.accords_sur_les_mots(grilles_avec_paroles, mots, [float(x) for x in temps], accords, lire_accord)
+            bilan["variantes_accords"] = variantes_des_grilles(G, grilles_avec_paroles, mots, [float(x) for x in temps], accords, lire_accord)
             communs = [i for i, a in enumerate(sur) if a is not None and accords[i] is not None]
             infos_g["accord_de_la_majorite_avec_la_partition"] = round(sum(sur[i][0] == accords[i][0] for i in communs) / len(communs), 2) if communs else None
             bilan["grilles_en_ligne_sur_les_mots"] = infos_g
@@ -2152,6 +2153,44 @@ def traiter(t):
             traceback.print_exc()
     livrer(mots)
     return bilan
+
+
+def variantes_des_grilles(G, pages, mots, temps, accords, lire):
+    """Chaque grille en ligne accrochée aux paroles, transposée dans le ton où elle s'accorde le mieux avec notre
+    analyse, devient une suite d'accords complète (notre analyse comble les passages qu'elle ne couvre pas : intro,
+    solos), plus la majorité des grilles. La partition peut ainsi en afficher une à la place de la nôtre, au choix
+    de qui la lit. Renvoie [{"nom", "accord", "changements": [[n° du temps, fondamentale, qualité, basse ou -1]]}]."""
+    n, sortie = len(accords), []
+    cands = G.accrocher_aux_mots(pages, mots, temps, lire)
+    if not cands:
+        return sortie
+    def suite(sur, nom):
+        d, juste, communs = 0, 0, [i for i in range(n) if sur[i] is not None and accords[i] is not None]
+        if communs:
+            d, juste = max(((d, sum((sur[i][0] + d) % 12 == accords[i][0] for i in communs)) for d in range(12)), key=lambda x: x[1])
+        changements, avant = [], None
+        for i in range(n):
+            a = sur[i]
+            if a is not None:
+                x = ((a[0] + d) % 12, a[1], -1 if a[2] is None else (a[2] + d) % 12)
+            elif accords[i] is not None:
+                b = accords[i][3] if len(accords[i]) > 3 and accords[i][3] is not None else -1
+                x = (int(accords[i][0]), accords[i][1], int(b))
+            else:
+                x = None
+            if x is not None and x != avant:
+                changements.append([i, *x])
+            avant = x if x is not None else avant
+        return {"nom": nom, "accord": round(juste / len(communs), 2) if communs else None, "changements": changements}
+    vus = {}
+    for sur, origine, nb in cands:
+        nom = origine.replace("www.", "")
+        vus[nom] = vus.get(nom, 0) + 1
+        sortie.append(suite(sur, nom + (f" ({vus[nom]})" if vus[nom] > 1 else "")))
+    majorite, _ = G.recouper(cands, n, accords, seuil=0.0)
+    if len(cands) > 1:
+        sortie.insert(0, suite(majorite, "majorité des grilles"))
+    return sortie
 
 
 def ecrire_rapport(bilans):

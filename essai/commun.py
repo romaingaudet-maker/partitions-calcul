@@ -447,7 +447,9 @@ def assembler(temps, num, accords, mots, sub):
 
 # ------------------------------------------------------------------------ bilan
 def noter_bilan(resultats, bilan):
-    """Inscrit (ou remplace) l'état d'un titre dans resultats/bilan.json, que lit la page « Ma playlist »."""
+    """Inscrit (ou remplace) l'état d'un titre dans resultats/bilan.json, que lit la page « Ma playlist ».
+    Les variantes d'accords restent dans la partition elle-même : le bilan doit rester léger."""
+    bilan = {k: v for k, v in bilan.items() if k != "variantes_accords"}
     f = Path(resultats) / "bilan.json"
     try:                                                       # ce passage possède ce titre : publier.py n'enregistre que les siens
         travail = Path(resultats).parent / "travail"
