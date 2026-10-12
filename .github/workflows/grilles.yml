@@ -1,0 +1,51 @@
+name: Grilles au choix
+
+# Pose sur les partitions déjà faites les grilles d'accords publiées en ligne, calées sur leurs paroles, pour qu'on
+# puisse les choisir à la place de notre analyse (essai/grilles_au_choix.py). Ne réécoute rien : seuls les sites de
+# grilles sont lus. Les nouvelles analyses les calculent elles-mêmes.
+on:
+  workflow_dispatch:
+    inputs:
+      titres:
+        description: "Identifiants des titres (séparés par des espaces) ; vide : toutes les partitions qui n'en ont pas"
+        required: false
+        default: ""
+      tous:
+        description: "Refaire aussi celles qui en ont déjà"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grilles-au-choix
+  cancel-in-progress: false
+
+env:
+  DONNEES: ${{ github.workspace }}/donnees
+
+jobs:
+  grilles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code
+      - name: Partitions
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DEPOT_DONNEES || 'romaingaudet-maker/partitions-' }}
+          token: ${{ secrets.JETON }}
+          ref: main
+          path: donnees
+          sparse-checkout: |
+            resultats/*.json
+          sparse-checkout-cone-mode: false
+      - name: Grilles
+        env:
+          PUBLIER: "1"
+          TITRES: ${{ inputs.titres }}
+          TOUS: ${{ inputs.tous && '1' || '' }}
+        run: cd code/essai && python3 -u grilles_au_choix.py

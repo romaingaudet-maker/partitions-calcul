@@ -383,6 +383,47 @@ def pages_chordsbase(artiste, titre, nombre=1):
     return [f"https://www.chordsbase.com/guitar-chords/{limace(artiste)}/{limace(_court(titre))}"]
 
 
+
+def variantes(pages, mots, temps, accords, lire):
+    """Chaque grille en ligne accrochée aux paroles, transposée dans le ton où elle s'accorde le mieux avec notre
+    analyse, devient une suite d'accords complète (notre analyse comble les passages qu'elle ne couvre pas : intro,
+    solos), plus la majorité des grilles. La partition peut ainsi en afficher une à la place de la nôtre, au choix
+    de qui la lit. Renvoie [{"nom", "accord", "transposition" (demi-tons ajoutés à la grille telle qu'écrite), "changements":
+    [[n° du temps, fondamentale, qualité, basse ou -1, (1 si l'accord vient de notre analyse)]]}]."""
+    n, sortie = len(accords), []
+    cands = accrocher_aux_mots(pages, mots, temps, lire)
+    if not cands:
+        return sortie
+    def suite(sur, nom):
+        d, juste, communs = 0, 0, [i for i in range(n) if sur[i] is not None and accords[i] is not None]
+        if communs:
+            d, juste = max(((d, sum((sur[i][0] + d) % 12 == accords[i][0] for i in communs)) for d in range(12)), key=lambda x: x[1])
+        changements, avant = [], None
+        for i in range(n):
+            a = sur[i]
+            if a is not None:
+                x = ((a[0] + d) % 12, a[1], -1 if a[2] is None else (a[2] + d) % 12)
+            elif accords[i] is not None:
+                b = accords[i][3] if len(accords[i]) > 3 and accords[i][3] is not None else -1
+                x = (int(accords[i][0]), accords[i][1], int(b))
+            else:
+                x = None
+            if x is not None and x != avant:
+                changements.append([i, *x] + ([1] if a is None else []))   # 1 : passage comblé par notre analyse
+            avant = x if x is not None else avant
+        return {"nom": nom, "accord": round(juste / len(communs), 2) if communs else None, "transposition": d if d <= 6 else d - 12,
+                "changements": changements}
+    vus = {}
+    for sur, origine, nb in cands:
+        nom = origine.replace("www.", "")
+        vus[nom] = vus.get(nom, 0) + 1
+        sortie.append(suite(sur, nom + (f" ({vus[nom]})" if vus[nom] > 1 else "")))
+    majorite, _ = recouper(cands, n, accords, seuil=0.0)
+    if len(cands) > 1:
+        sortie.insert(0, suite(majorite, "majorité des grilles"))
+    return sortie
+
+
 SITES = (("cifraclub", pages_cifraclub), ("guitartabs", pages_guitartabs), ("guitaretab", pages_guitaretab), ("acordesweb", pages_acordesweb),
          ("tabs4acoustic", pages_tabs4acoustic), ("ukuleletabs", pages_ukuleletabs), ("chordsbase", pages_chordsbase))
 
