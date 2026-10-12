@@ -1620,6 +1620,7 @@ def placer_mots(voix_wav, lignes, extrait, decalage_connu=None, jusqua=None, ind
             j = k + 1
         else:
             j += 1
+    tassees = set()
     for a_l, b_l in blocs_tasses:
         a_th = lignes[a_l][0] - decalage
         b_th = (lignes[b_l + 1][0] if b_l + 1 < len(lignes) else lignes[b_l][0] + 15.0) - decalage
@@ -1634,6 +1635,22 @@ def placer_mots(voix_wav, lignes, extrait, decalage_connu=None, jusqua=None, ind
         except Exception:
             continue
         places = [(x, (a + s0 * pas, a + e0 * pas, w, c)) for (s0, e0, c), (x, w, _) in zip(al, lot)]
+        # Le son ne reconnaît pas ces mots (voix noyée, réverbération) et les laisse entassés : on les répartit alors
+        # au débit moyen du bloc, dans l'ordre, chaque ligne au prorata de ses mots. Moins juste qu'un alignement
+        # réussi, mais lisible et jamais pire que l'entassement.
+        def debit_max(pl):
+            pire = 0.0
+            for x in range(a_l, b_l + 1):
+                l = [m for y, m in pl if y == x]
+                if len(l) >= 4:
+                    pire = max(pire, len(l) / max(0.2, l[-1][1] - l[0][0]))
+            return pire
+        if places and debit_max(places) > 4.5 and float(np.mean([m[3] for _, m in places])) < 0.15:
+            pas_mot = (b_th - a_th) / len(lot)
+            places = [(x, (a_th + i * pas_mot, a_th + (i + 0.85) * pas_mot, w, 0.0)) for i, (x, w, _) in enumerate(lot)]
+            print(f"    lignes {a_l} à {b_l} : le son ne les reconnaît pas, réparties à {1 / pas_mot:.1f} mots/s", flush=True)
+            infos["lignes_tassees_reparties"] = infos.get("lignes_tassees_reparties", 0) + b_l - a_l + 1
+        tassees.update(range(a_l, b_l + 1))
         for x in range(a_l, b_l + 1):
             ligne = [m for y, m in places if y == x]
             debut, fin = (ligne[0][0], ligne[-1][1]) if ligne else (a_th, b_th)
@@ -1656,7 +1673,7 @@ def placer_mots(voix_wav, lignes, extrait, decalage_connu=None, jusqua=None, ind
     for j in sorted(choix):
         ligne, a_th, b_th, bord, ote = essais[j][choix[j]]
         retires += ote
-        if bord is None and choix[j] == 0 and len(passe1.get(j, [])) == len(textes[j]) and (
+        if bord is None and choix[j] == 0 and j not in tassees and len(passe1.get(j, [])) == len(textes[j]) and (
                 not ligne or np.mean([m[3] for m in passe1[j]]) > np.mean([m[3] for m in ligne]) + 0.03):
             ligne, repris = passe1[j], repris + 1                      # la passe 1 était meilleure pour cette ligne
         print(f"    ligne {j:>3} : fenêtre {a_th:6.1f} → {b_th:6.1f} s, {len(textes[j])} mots, {len(ligne)} gardés, "
