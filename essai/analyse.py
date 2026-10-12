@@ -1595,6 +1595,52 @@ def placer_mots(voix_wav, lignes, extrait, decalage_connu=None, jusqua=None, ind
             if d is not None and abs(d) <= 120.0 and all(abs(d - e) > 3.0 for e in ecarts) and len(ecarts) < 5:
                 ecarts.append(float(d))
     essais = {j: {k: essayer(j, d, d) for k, d in enumerate(ecarts)} for j in range(len(lignes)) if textes[j]}
+    # Paroles mal horodatées à la source : des lignes tassées (plus de quatre mots par seconde, ou une seconde à peine
+    # par ligne) s'entassaient chacune dans sa fenêtre minuscule, jusqu'à 27 mots sur une mesure (« Total Eclipse of the
+    # Heart » : une centaine de mots chantés en 45 s, horodatés sur 14 s). Une telle suite de lignes est alignée d'un
+    # seul bloc, sur une fenêtre élargie aux lignes suivantes : c'est le son qui répartit les mots.
+    def tassee(j):
+        t_s = lignes[j + 1][0] if j + 1 < len(lignes) else lignes[j][0] + 15.0
+        ecart_l = max(0.05, t_s - lignes[j][0])
+        return bool(textes[j]) and (len(textes[j]) / ecart_l > 4.0 and len(textes[j]) >= 4 or ecart_l < 1.2)
+    j, blocs_tasses = 0, []
+    while j < len(lignes):
+        if tassee(j):
+            k = j
+            while k + 1 < len(lignes) and tassee(k + 1):
+                k += 1
+            # Le tassement déborde souvent sur les lignes suivantes : on les prend avec, jusqu'à retrouver un débit chantable
+            # (trois mots et demi par seconde au plus sur l'ensemble du bloc), sans dépasser une minute.
+            fin_bloc = lambda k: lignes[k + 1][0] if k + 1 < len(lignes) else lignes[k][0] + 15.0
+            debit = lambda k: sum(len(textes[x]) for x in range(j, k + 1)) / max(0.2, fin_bloc(k) - lignes[j][0])
+            while k + 1 < len(lignes) and debit(k) > 3.5 and fin_bloc(k + 1) - lignes[j][0] <= 60.0:
+                k += 1
+            if sum(len(textes[x]) for x in range(j, k + 1)) >= 10:
+                blocs_tasses.append((j, k))
+            j = k + 1
+        else:
+            j += 1
+    for a_l, b_l in blocs_tasses:
+        a_th = lignes[a_l][0] - decalage
+        b_th = (lignes[b_l + 1][0] if b_l + 1 < len(lignes) else lignes[b_l][0] + 15.0) - decalage
+        if a_th < 0 or b_th > duree or (jusqua is not None and b_th > jusqua) or b_th - a_th > 60.0:
+            continue
+        a, b = max(0.0, a_th - 0.8), min(duree, b_th + 0.8)
+        ia = int(a / pas)
+        ib = max(ia + 2, int(b / pas))
+        lot = [(x, w, n) for x in range(a_l, b_l + 1) for w, n in textes[x]]
+        try:
+            al = aligner_segment(emission[:, ia:ib], [n for _, _, n in lot], joker, alphabet)
+        except Exception:
+            continue
+        places = [(x, (a + s0 * pas, a + e0 * pas, w, c)) for (s0, e0, c), (x, w, _) in zip(al, lot)]
+        for x in range(a_l, b_l + 1):
+            ligne = [m for y, m in places if y == x]
+            debut, fin = (ligne[0][0], ligne[-1][1]) if ligne else (a_th, b_th)
+            essais[x] = {0: (ligne, debut, fin, None, 0)}
+        print(f"    lignes {a_l} à {b_l} : horodatages tassés ({len(lot)} mots en {b_th - a_th:.1f} s), alignées d'un seul bloc", flush=True)
+    if blocs_tasses:
+        infos["lignes_tassees_alignees_en_bloc"] = sum(b_l - a_l + 1 for a_l, b_l in blocs_tasses)
     choix = {j: 0 for j, e in essais.items() if e[0] is not None}
     if len(ecarts) > 1:
         # Meilleur enchaînement : lignes dans l'ordre, instants croissants, somme des confiances la plus haute.
