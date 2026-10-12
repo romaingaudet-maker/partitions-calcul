@@ -2176,7 +2176,8 @@ def variantes_des_grilles(G, pages, mots, temps, accords, lire):
     """Chaque grille en ligne accrochée aux paroles, transposée dans le ton où elle s'accorde le mieux avec notre
     analyse, devient une suite d'accords complète (notre analyse comble les passages qu'elle ne couvre pas : intro,
     solos), plus la majorité des grilles. La partition peut ainsi en afficher une à la place de la nôtre, au choix
-    de qui la lit. Renvoie [{"nom", "accord", "changements": [[n° du temps, fondamentale, qualité, basse ou -1]]}]."""
+    de qui la lit. Renvoie [{"nom", "accord", "transposition" (demi-tons ajoutés à la grille telle qu'écrite), "changements":
+    [[n° du temps, fondamentale, qualité, basse ou -1, (1 si l'accord vient de notre analyse)]]}]."""
     n, sortie = len(accords), []
     cands = G.accrocher_aux_mots(pages, mots, temps, lire)
     if not cands:
@@ -2196,9 +2197,10 @@ def variantes_des_grilles(G, pages, mots, temps, accords, lire):
             else:
                 x = None
             if x is not None and x != avant:
-                changements.append([i, *x])
+                changements.append([i, *x] + ([1] if a is None else []))   # 1 : passage comblé par notre analyse
             avant = x if x is not None else avant
-        return {"nom": nom, "accord": round(juste / len(communs), 2) if communs else None, "changements": changements}
+        return {"nom": nom, "accord": round(juste / len(communs), 2) if communs else None, "transposition": d if d <= 6 else d - 12,
+                "changements": changements}
     vus = {}
     for sur, origine, nb in cands:
         nom = origine.replace("www.", "")
