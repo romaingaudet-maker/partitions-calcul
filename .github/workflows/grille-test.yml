@@ -1,0 +1,48 @@
+name: Grille test
+
+# Toutes les propositions d'une recherche guitartabs.cc, triées et recoupées en une grille de consensus, posée dans le
+# menu des accords d'une partition sous le nom « grille test » (essai/grille_test.py).
+on:
+  workflow_dispatch:
+    inputs:
+      recherche:
+        description: "Adresse de la recherche guitartabs.cc"
+        required: true
+      titre:
+        description: "Identifiant de la partition (nom du fichier dans resultats/, sans .json)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grilles-au-choix
+  cancel-in-progress: false
+
+env:
+  DONNEES: ${{ github.workspace }}/donnees
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code
+      - name: Partitions
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DEPOT_DONNEES || 'romaingaudet-maker/partitions-' }}
+          token: ${{ secrets.JETON }}
+          ref: main
+          path: donnees
+          sparse-checkout: |
+            resultats/*.json
+          sparse-checkout-cone-mode: false
+      - name: Grille test
+        env:
+          PUBLIER: "1"
+          RECHERCHE: ${{ inputs.recherche }}
+          TITRE: ${{ inputs.titre }}
+        run: cd code/essai && python3 -u grille_test.py
