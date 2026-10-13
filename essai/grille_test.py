@@ -94,32 +94,25 @@ def main():
     p = json.loads(f.read_text(encoding="utf-8"))
     temps, accords, mots = X.depuis_la_partition(p)
     n = len(temps)
-    # Les mesures : premier temps de chacune ; une mesure de 4 temps offre aussi son 3e temps (demi-mesure)
+    # Les temps, et le premier temps de chaque mesure
     debuts, k = [], 0
     for m in p["mesures"]:
         debuts.append((k, len(m["temps"])))
         k += len(m["temps"])
-    cases = []                                              # (temps de départ, temps de fin exclu) de chaque case
+    cases = [(i, i + 1) for i in range(n)]                  # une case par temps
+    est_premier = {d0 for d0, _ in debuts}
+    mesure_du_temps = [0] * n
+    for x, (d0, nb) in enumerate(debuts):
+        for i in range(d0, min(n, d0 + nb)):
+            mesure_du_temps[i] = x
+    # Notre écoute : l'accord de chaque temps, et celui qui tient le plus de la mesure (posé sur son premier temps)
+    ecoute_temps = [None if a is None else (int(a[0]), a[1], None) for a in accords]
+    ecoute = [None] * n
     for d0, nb in debuts:
-        if nb >= 4:
-            cases += [(d0, d0 + nb // 2), (d0 + nb // 2, d0 + nb)]
-        else:
-            cases.append((d0, d0 + nb))
-    case_du_temps = [0] * n
-    for c, (a, b) in enumerate(cases):
-        for i in range(a, b):
-            case_du_temps[i] = c
-    premier = [c for c, (a, _) in enumerate(cases) if any(a == d0 for d0, _ in debuts)]
-    est_premier = set(premier)
-    # Notre écoute, case par case : l'accord tenu sur la plus grande part de la case
-    ecoute = []
-    for a, b in cases:
-        cpt = Counter(cle(accords[i]) for i in range(a, b) if accords[i] is not None)
+        cpt = Counter(cle(accords[i]) for i in range(d0, min(n, d0 + nb)) if accords[i] is not None)
         if cpt:
             c = cpt.most_common(1)[0][0]
-            ecoute.append(next((int(accords[i][0]), accords[i][1], None) for i in range(a, b) if cle(accords[i]) == c))
-        else:
-            ecoute.append(None)
+            ecoute[d0] = next(ecoute_temps[i] for i in range(d0, min(n, d0 + nb)) if cle(accords[i]) == c)
 
     rapport = {"recherche": recherche, "date": time.strftime("%Y-%m-%d %H:%M"), "pages": []}
     adresses = liens_de_recherche(recherche, p["titre"])
@@ -162,25 +155,25 @@ def main():
         d = max(range(12), key=lambda d: sum((sur[i][0] + d) % 12 == accords[i][0] for i in communs)) if communs else 0
         sur = [transposer(a, d) for a in sur]
         par_case = [None] * len(cases)
-        couverte = [False] * len(cases)
+        # Placement : la plupart des changements tombent sur un premier temps. Si un fichier les a presque tous un ou
+        # deux temps à côté (accords écrits au-dessus d'une syllabe qui anticipe ou suit le temps fort), il est décalé
+        # en bloc. Les changements qui restent hors du premier temps sont des accords de passage possibles ; on les
+        # garde à leur place s'ils sont confirmés (par une autre grille ou par l'écoute), sinon ils vont au premier
+        # temps le plus proche (voir plus bas, une fois les grilles réunies).
+        changes = [i for i in range(n) if sur[i] is not None and (i == 0 or sur[i - 1] != sur[i])]
+        sur_premier = lambda dec: sum(1 for i in changes if 0 <= i + dec < n and i + dec in est_premier)
+        decal = max((0, 1, -1, 2, -2), key=lambda dec: (sur_premier(dec), dec == 0))
+        if decal and sur_premier(decal) < sur_premier(0) + max(2, 0.2 * len(changes)):
+            decal = 0
+        ligne["decalage_temps"] = decal
+        ligne["changements_sur_le_premier_temps"] = round(sur_premier(decal) / max(1, len(changes)), 2)
+        poses, couverte = {}, [False] * n
         for i in range(n):
-            if sur[i] is not None:
-                couverte[case_du_temps[i]] = True
-        # Chaque changement va au premier temps le plus proche : sur les temps 1-2, celui de sa mesure ; sur les temps
-        # 3-4, celui de la mesure suivante (accord écrit sur une syllabe qui précède le temps fort). Deux changements
-        # qui tombent sur le même premier temps se partagent la mesure : le second prend le 3e temps.
-        poses = {}
-        for i in range(n):
-            if sur[i] is None or (i and sur[i - 1] == sur[i]):
-                continue
-            m = max(x for x, (d0, _) in enumerate(debuts) if d0 <= i)
-            d0, nb = debuts[m]
-            if i - d0 >= max(1, nb // 2) and m + 1 < len(debuts):
-                m += 1
-            c = case_du_temps[debuts[m][0]]
-            if c in poses and cle(poses[c]) != cle(sur[i]) and c + 1 < len(cases) and c + 1 not in est_premier and c + 1 not in poses:
-                c += 1
-            poses[c] = sur[i]
+            if sur[i] is not None and 0 <= i + decal < n:
+                couverte[i + decal] = True
+        for i in changes:
+            if 0 <= i + decal < n:
+                poses[i + decal] = sur[i]
         courant = None
         for c in range(len(cases)):
             courant = poses.get(c, courant)
@@ -252,8 +245,35 @@ def main():
                     proches = [m for m in vocabulaire if m[0] == e[0]]
                     grille[c] = exemplaire[max(proches, key=lambda m: vocabulaire[m])] if proches else e
                 comblee[c] = True
-        if grille[c] is None and c > 0:                     # 3e temps sans changement : l'accord du 1er temps continue
+        if grille[c] is None and c > 0:                     # pas de changement sur ce temps : l'accord continue
             grille[c], comblee[c] = grille[c - 1], comblee[c - 1]
+
+    # Accords de passage : un changement hors du premier temps n'est gardé que s'il est confirmé, par une autre grille
+    # au même temps ou par notre écoute ; sinon il va au premier temps le plus proche (temps 2 : celui de sa mesure,
+    # temps 3 et 4 : celui de la mesure suivante).
+    passage, ramenes = 0, 0
+    def change(g, c):
+        return g[c] is not None and (c == 0 or g[c - 1] is None or cle(g[c - 1]) != cle(g[c]))
+    for c in range(1, n):
+        if comblee[c] or c in est_premier or not change(grille, c):
+            continue
+        appuis = sum(1 for _, g, _, _ in cales if change(g, c) and cle(g[c]) == cle(grille[c]))
+        ecoute_ok = any(ecoute_temps[j] is not None and cle(ecoute_temps[j]) == cle(grille[c]) for j in (c, c + 1) if j < n)
+        couvrent = sum(1 for _, g, _, _ in cales if g[c] is not None)
+        if (appuis >= 2 and appuis >= 0.5 * couvrent) or ecoute_ok:
+            passage += 1
+            continue
+        d0, nb = debuts[mesure_du_temps[c]]
+        a, fin = grille[c], c
+        while fin < n and grille[fin] is not None and cle(grille[fin]) == cle(a):
+            fin += 1
+        if c - d0 == 1:                                     # 2e temps : avancé au 1er
+            grille[d0] = a
+        else:                                               # 3e ou 4e : retardé au 1er temps suivant
+            nxt = d0 + nb
+            for j in range(c, min(nxt, n)):
+                grille[j] = grille[c - 1]
+        ramenes += 1
 
     # 3. Renversements : appris des fichiers qui en écrivent, selon l'accord et ce qui l'entoure
     avec_renv = [(u, s) for u, s in suites if any(a[2] is not None for a in s)]
@@ -303,15 +323,16 @@ def main():
             changements.append([a, *x] + ([1] if comblee[c] else []))
         avant = x
     hors_premier = sum(1 for ch in changements if not any(ch[0] == d0 for d0, _ in debuts))
-    communs = [c for c in range(len(cases)) if grille[c] is not None and not comblee[c] and ecoute[c] is not None]
-    accord = round(sum(grille[c][0] == ecoute[c][0] for c in communs) / len(communs), 2) if communs else None
+    communs = [c for c in range(len(cases)) if grille[c] is not None and not comblee[c] and ecoute_temps[c] is not None]
+    accord = round(sum(grille[c][0] == ecoute_temps[c][0] for c in communs) / len(communs), 2) if communs else None
     for u, g, ligne, _ in cales:
         ligne["retenue"] = True
     rapport.update({"propositions": len(adresses), "fichiers_d_accords": len(fichiers), "calees": len(cales),
                     "avec_renversements": len(avec_renv), "renversements_ajoutes": dict(ajoutes),
                     "cases_par_les_grilles": sum(1 for c in range(len(cases)) if grille[c] is not None and not comblee[c]),
                     "cases_par_l_ecoute": sum(comblee), "cases": len(cases),
-                    "changements_hors_premier_temps": hors_premier, "accord_avec_notre_analyse": accord})
+                    "changements_hors_premier_temps": hors_premier, "accords_de_passage_gardes": passage,
+                    "changements_ramenes_au_premier_temps": ramenes, "accord_avec_notre_analyse": accord})
     for l in rapport["pages"]:
         print("  ", json.dumps(l, ensure_ascii=False), flush=True)
     print({k: v for k, v in rapport.items() if k != "pages"}, flush=True)
