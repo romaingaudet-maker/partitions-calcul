@@ -83,6 +83,15 @@ def voter(grilles, n, poids=None):
     return sortie
 
 
+def lire(sym):
+    """Comme commun.lire_accord, mais un accord de puissance (« C5 », sans tierce) garde la qualité « 5 » : ni majeur
+    ni mineur, c'est l'écoute qui dira laquelle écrire."""
+    a = C.lire_accord(sym)
+    if a and re.match(r"^\s*[A-G][#b♯♭]?5\s*(/|$)", str(sym)):
+        return a[0], "5", a[2]
+    return a
+
+
 def transposer(a, d):
     return None if a is None else ((a[0] + d) % 12, a[1], None if a[2] is None else (a[2] + d) % 12)
 
@@ -113,6 +122,18 @@ def main():
         if cpt:
             c = cpt.most_common(1)[0][0]
             ecoute[d0] = next(ecoute_temps[i] for i in range(d0, min(n, d0 + nb)) if cle(accords[i]) == c)
+
+    # Qualité d'un accord de puissance : celle que l'écoute entend sur ce temps pour la même fondamentale, sinon la
+    # plus fréquente pour cette fondamentale dans tout le morceau, sinon majeur.
+    par_racine = defaultdict(Counter)
+    for a in accords:
+        if a is not None:
+            par_racine[int(a[0])][a[1]] += 1
+    def qualite_de(r, i=None):
+        for j in ([i, i - 1, i + 1] if i is not None else []):
+            if j is not None and 0 <= j < n and accords[j] is not None and int(accords[j][0]) == r:
+                return accords[j][1]
+        return par_racine[r].most_common(1)[0][0] if par_racine[r] else "maj"
 
     rapport = {"recherche": recherche, "date": time.strftime("%Y-%m-%d %H:%M"), "pages": []}
     adresses = liens_de_recherche(recherche, p["titre"])
@@ -146,7 +167,7 @@ def main():
         except Exception as e:
             ligne["ecartee"] = f"illisible ({type(e).__name__})"
             continue
-        suite = [a for a in (C.lire_accord(x) for x in G.accords_de_la_page(page)) if a]
+        suite = [a for a in (lire(x) for x in G.accords_de_la_page(page)) if a]
         ligne["accords_lus"] = len(suite)
         if len(suite) < 8 or len({cle(a) for a in suite}) < 3:
             ligne["ecartee"] = "trop peu d'accords lisibles"
@@ -156,7 +177,7 @@ def main():
         if len(lignes) < 4:
             ligne["ecartee"] = "accords sans paroles dessous : impossible de les caler"
             continue
-        cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, C.lire_accord)
+        cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, lire)
         if not cands or sum(a is not None for a in cands[0][0]) < 24:
             ligne["ecartee"] = "ses accords ne se calent pas sur les paroles du morceau"
             continue
@@ -166,7 +187,7 @@ def main():
     # 2a. Les fichiers calés sur les paroles, ramenés aux premiers temps, case par case
     cales = []                                              # (adresse, accord par case ou None, rapport, transposition)
     for u, suite, lignes, ligne in fichiers:
-        cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, C.lire_accord) if len(lignes) >= 4 else []
+        cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, lire) if len(lignes) >= 4 else []
         if not cands or sum(a is not None for a in cands[0][0]) < 24:
             ligne["calee"] = False
             continue
@@ -174,6 +195,7 @@ def main():
         communs = [i for i in range(n) if sur[i] is not None and accords[i] is not None]
         d = max(range(12), key=lambda d: sum((sur[i][0] + d) % 12 == accords[i][0] for i in communs)) if communs else 0
         sur = [transposer(a, d) for a in sur]
+        sur = [None if a is None else (a if a[1] != "5" else (a[0], qualite_de(a[0], i), a[2])) for i, a in enumerate(sur)]
         par_case = [None] * len(cases)
         # Placement : la plupart des changements tombent sur un premier temps. Si un fichier les a presque tous un ou
         # deux temps à côté (accords écrits au-dessus d'une syllabe qui anticipe ou suit le temps fort), il est décalé
@@ -229,6 +251,7 @@ def main():
             d = max(range(12), key=lambda d: sum(histo.get(cle(transposer(a, d)), 0) for a in suite))
             ligne["transposition"] = d if d <= 6 else d - 12
         s = [transposer(a, d) for a in suite]
+        s = [a if a[1] != "5" else (a[0], qualite_de(a[0]), a[2]) for a in s]
         suites.append((u, [a for j, a in enumerate(s) if j == 0 or cle(a) != cle(s[j - 1]) or a[2] != s[j - 1][2]]))
     enchainements = Counter()
     for _, s in suites:
@@ -259,11 +282,7 @@ def main():
         elif c in est_premier or (c > 0 and grille[c - 1] is None):
             e = ecoute[c]
             if e is not None:
-                if cle(e) in vocabulaire:
-                    grille[c] = exemplaire[cle(e)]
-                else:                                       # l'écoute hors des suites connues : l'accord connu de même fondamentale
-                    proches = [m for m in vocabulaire if m[0] == e[0]]
-                    grille[c] = exemplaire[max(proches, key=lambda m: vocabulaire[m])] if proches else e
+                grille[c] = exemplaire.get(cle(e), e)              # l'écoute telle quelle (majeur ou mineur compris)
                 comblee[c] = True
         if grille[c] is None and c > 0:                     # pas de changement sur ce temps : l'accord continue
             grille[c], comblee[c] = grille[c - 1], comblee[c - 1]
