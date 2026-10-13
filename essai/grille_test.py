@@ -118,13 +118,24 @@ def main():
     adresses = liens_de_recherche(recherche, p["titre"])
     print(f"{len(adresses)} propositions pour ce titre", flush=True)
 
-    # 1. Les fichiers d'accords seulement
-    fichiers = []                                           # (adresse, suite brute des accords, lignes, rapport)
-    for u in adresses:
-        ligne = {"page": u, "genre": genre(u)}
+    # 1. Les fichiers d'accords seulement, et pour un même interprète la version la plus récente (numéro de version
+    #    le plus haut : chaque nouvelle version déposée sur le site reçoit le suivant). Si elle est illisible ou trop
+    #    pauvre, on prend la précédente.
+    def version(u):
+        m = re.search(r"_ver_(\d+)\.html$", u)
+        return int(m.group(1)) if m else 1
+    def interprete(u):
+        return u.split("/tabs/")[1].split("/")[1] if "/tabs/" in u else u
+    ordre = sorted(adresses, key=lambda u: (genre(u) != "accords", interprete(u), -version(u)))
+    fichiers, servis = [], set()                            # (adresse, suite brute des accords, lignes, rapport)
+    for u in ordre:
+        ligne = {"page": u, "genre": genre(u), "version": version(u)}
         rapport["pages"].append(ligne)
         if ligne["genre"] != "accords":
             ligne["ecartee"] = "pas un fichier d'accords (" + ligne["genre"] + ")"
+            continue
+        if interprete(u) in servis:
+            ligne["ecartee"] = "version plus ancienne : la plus récente est retenue"
             continue
         try:
             if not G.admis(u):
@@ -141,7 +152,16 @@ def main():
             ligne["ecartee"] = "trop peu d'accords lisibles"
             continue
         ligne["renversements"] = sum(1 for a in suite if a[2] is not None)
-        fichiers.append((u, suite, G.lignes_avec_accords(page), ligne))
+        lignes = G.lignes_avec_accords(page)
+        if len(lignes) < 4:
+            ligne["ecartee"] = "accords sans paroles dessous : impossible de les caler"
+            continue
+        cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, C.lire_accord)
+        if not cands or sum(a is not None for a in cands[0][0]) < 24:
+            ligne["ecartee"] = "ses accords ne se calent pas sur les paroles du morceau"
+            continue
+        fichiers.append((u, suite, lignes, ligne))
+        servis.add(interprete(u))
 
     # 2a. Les fichiers calés sur les paroles, ramenés aux premiers temps, case par case
     cales = []                                              # (adresse, accord par case ou None, rapport, transposition)
