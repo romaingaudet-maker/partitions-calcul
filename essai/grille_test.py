@@ -167,7 +167,9 @@ def main():
         except Exception as e:
             ligne["ecartee"] = f"illisible ({type(e).__name__})"
             continue
-        suite = [a for a in (lire(x) for x in G.accords_de_la_page(page)) if a]
+        brut = G.accords_de_la_page(page)
+        ligne["accords_ecrits"] = " ".join(brut)                 # les seuls symboles d'accords, sans paroles
+        suite = [a for a in (lire(x) for x in brut) if a]
         ligne["accords_lus"] = len(suite)
         if len(suite) < 8 or len({cle(a) for a in suite}) < 3:
             ligne["ecartee"] = "trop peu d'accords lisibles"
@@ -337,6 +339,9 @@ def main():
             ap = cle(s[j + 1]) if j + 1 < len(s) else None
             par_contexte[(av, cle(a), ap)][a[2]] += 1
             par_accord[cle(a)][a[2]] += 1
+    rapport["renversements_appris"] = {f"{NOMS[k[1][0]]}{'m' if k[1][1] else ''} entre {NOMS[k[0][0]] if k[0] else '-'} et {NOMS[k[2][0]] if k[2] else '-'}":
+                                       {("/" + NOMS[b] if b is not None else "sans"): v for b, v in c.items()}
+                                       for k, c in par_contexte.items() if any(b is not None for b in c)}
     ajoutes = Counter()
     sequence = [c for c in range(len(cases)) if grille[c] is not None and (c == 0 or grille[c - 1] is None or cle(grille[c]) != cle(grille[c - 1]))]
     for x, c in enumerate(sequence):
