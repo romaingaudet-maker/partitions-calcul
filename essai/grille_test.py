@@ -96,6 +96,84 @@ def transposer(a, d):
     return None if a is None else ((a[0] + d) % 12, a[1], None if a[2] is None else (a[2] + d) % 12)
 
 
+def suivre_le_fichier(S, T, est_premier, debuts, ancre, n, Lmax=16, gap_max=48):
+    """Pose la suite d'accords S (dans l'ordre du fichier) sur les n temps du morceau. T : accord entendu par temps
+    (ou None) ; ancre : accord calé sur les paroles par temps (ou None). Chaque accord commence sur un premier temps
+    (ou un 3e temps, pénalisé) et dure de 2 à Lmax temps ; des temps peuvent rester sans accord du fichier (pénalité
+    légère), des accords du fichier peuvent être sautés (pénalité forte). Renvoie (accord par temps ou None,
+    {temps de départ: n° de l'accord dans S})."""
+    import itertools
+    m = len(S)
+    if not m:
+        return [None] * n, {}
+    departs = sorted(b for b in range(n) if b in est_premier or any(b == d0 + nb // 2 and nb >= 4 for d0, nb in debuts))
+    penalite = {b: (0.0 if b in est_premier else 0.6) for b in departs}
+    def tons(a):
+        t = {a[0], (a[0] + 7) % 12}
+        if a[1] != "5":
+            t.add((a[0] + 3) % 12 if a[1] in G.MINEURES else (a[0] + 4) % 12)
+        return t
+    tons_T = [None if a is None else tons(a) for a in T]
+    def note(a, i):
+        x = 0.0 if tons_T[i] is None else 1.5 * len(tons(a) & tons_T[i]) / 3 - 0.5
+        if ancre[i] is not None:
+            x += 0.6 if ancre[i][0] == a[0] else -0.3
+        return x
+    cumul = []
+    for a in S:
+        c = [0.0]
+        for i in range(n):
+            c.append(c[-1] + note(a, i))
+        cumul.append(c)
+    seg = lambda k, b, e: cumul[k][e] - cumul[k][b]
+    SAUT, TROU = 1.2, 0.12
+    NEG = -1e18
+    meilleur = [dict() for _ in range(m)]                   # meilleur[k][b] = (note, précédent (k, b) ou None)
+    for k in range(min(m, 4)):                              # le fichier peut commencer par quelques accords absents
+        for b in departs:
+            meilleur[k][b] = (-penalite[b] - SAUT * k, None)
+    idx = {b: x for x, b in enumerate(departs)}
+    fin_best, fin_arg = NEG, None
+    for k in range(m):
+        for b, (v, _) in sorted(meilleur[k].items()):
+            x = idx[b]
+            for b2 in itertools.islice(departs, x + 1, None):
+                if b2 - b < 2:
+                    continue
+                if b2 - b > Lmax + gap_max:
+                    break
+                duree = min(b2 - b, Lmax)
+                val = v + seg(k, b, b + duree) - TROU * (b2 - b - duree) - penalite[b2] - (0.15 if duree not in (2, 4, 8, 16) else 0)
+                for saut in (0, 1):
+                    k2 = k + 1 + saut
+                    if k2 < m and val - SAUT * saut > meilleur[k2].get(b2, (NEG,))[0]:
+                        meilleur[k2][b2] = (val - SAUT * saut, (k, b))
+            # dernier accord posé : il dure au plus Lmax temps, le reste du morceau est sans grille
+            if m - k <= 4:
+                duree = min(Lmax, n - b)
+                val = v + seg(k, b, b + duree) - SAUT * (m - 1 - k)
+                if val > fin_best:
+                    fin_best, fin_arg = val, (k, b, duree)
+    sortie, depart = [None] * n, {}
+    if fin_arg is None:
+        return sortie, depart
+    k, b, duree = fin_arg
+    for i in range(b, b + duree):
+        sortie[i] = S[k]
+    depart[b] = k
+    prec = meilleur[k][b][1]
+    suivant = b
+    while prec is not None:
+        k, b = prec
+        duree = min(suivant - b, Lmax)
+        for i in range(b, b + duree):
+            sortie[i] = S[k]
+        depart[b] = k
+        suivant = b
+        prec = meilleur[k][b][1]
+    return sortie, depart
+
+
 def main():
     recherche, ident = os.environ["RECHERCHE"], os.environ["TITRE"]
     f = X.RESULTATS / (ident + ".json")
@@ -176,54 +254,35 @@ def main():
             continue
         ligne["renversements"] = sum(1 for a in suite if a[2] is not None)
         lignes = G.lignes_avec_accords(page)
-        if len(lignes) < 4:
-            ligne["ecartee"] = "accords sans paroles dessous : impossible de les caler"
-            continue
-        cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, lire)
-        if not cands or sum(a is not None for a in cands[0][0]) < 24:
-            ligne["ecartee"] = "ses accords ne se calent pas sur les paroles du morceau"
-            continue
         fichiers.append((u, suite, lignes, ligne))
         servis.add(interprete(u))
 
-    # 2a. Les fichiers calés sur les paroles, ramenés aux premiers temps, case par case
-    cales = []                                              # (adresse, accord par case ou None, rapport, transposition)
+    # 2a. Chaque fichier est suivi d'un bout à l'autre : sa suite d'accords, dans l'ordre où elle est écrite, est posée
+    #     sur le morceau (alignement sur l'écoute, temps par temps), chaque accord commençant sur un premier temps de
+    #     mesure, ou sur un 3e temps (accord de passage, un peu pénalisé). Les accords calés sur les paroles, quand il y
+    #     en a, servent de points d'appui. Un passage du morceau que le fichier n'écrit pas (solo…) peut rester sans
+    #     accord de la grille ; un accord du fichier sans correspondance dans le morceau peut être sauté.
+    cales = []                                              # (adresse, accord par temps ou None, rapport, transposition)
     for u, suite, lignes, ligne in fichiers:
         cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, lire) if len(lignes) >= 4 else []
-        if not cands or sum(a is not None for a in cands[0][0]) < 24:
-            ligne["calee"] = False
-            continue
-        sur = cands[0][0]
-        communs = [i for i in range(n) if sur[i] is not None and accords[i] is not None]
-        d = max(range(12), key=lambda d: sum((sur[i][0] + d) % 12 == accords[i][0] for i in communs)) if communs else 0
-        sur = [transposer(a, d) for a in sur]
-        sur = [None if a is None else (a if a[1] != "5" else (a[0], qualite_de(a[0], i), a[2])) for i, a in enumerate(sur)]
-        par_case = [None] * len(cases)
-        # Placement : la plupart des changements tombent sur un premier temps. Si un fichier les a presque tous un ou
-        # deux temps à côté (accords écrits au-dessus d'une syllabe qui anticipe ou suit le temps fort), il est décalé
-        # en bloc. Les changements qui restent hors du premier temps sont des accords de passage possibles ; on les
-        # garde à leur place s'ils sont confirmés (par une autre grille ou par l'écoute), sinon ils vont au premier
-        # temps le plus proche (voir plus bas, une fois les grilles réunies).
-        changes = [i for i in range(n) if sur[i] is not None and (i == 0 or sur[i - 1] != sur[i])]
-        sur_premier = lambda dec: sum(1 for i in changes if 0 <= i + dec < n and i + dec in est_premier)
-        decal = max((0, 1, -1, 2, -2), key=lambda dec: (sur_premier(dec), dec == 0))
-        if decal and sur_premier(decal) < sur_premier(0) + max(2, 0.2 * len(changes)):
-            decal = 0
-        ligne["decalage_temps"] = decal
-        ligne["changements_sur_le_premier_temps"] = round(sur_premier(decal) / max(1, len(changes)), 2)
-        poses, couverte = {}, [False] * n
-        for i in range(n):
-            if sur[i] is not None and 0 <= i + decal < n:
-                couverte[i + decal] = True
-        for i in changes:
-            if 0 <= i + decal < n:
-                poses[i + decal] = sur[i]
-        courant = None
-        for c in range(len(cases)):
-            courant = poses.get(c, courant)
-            if couverte[c] or c in poses:
-                par_case[c] = courant
-        ligne.update({"calee": True, "transposition": d if d <= 6 else d - 12, "cases_couvertes": sum(x is not None for x in par_case)})
+        ancre = cands[0][0] if cands else [None] * n
+        communs = [i for i in range(n) if ancre[i] is not None and accords[i] is not None]
+        if len(communs) >= 24:
+            d = max(range(12), key=lambda d: sum((ancre[i][0] + d) % 12 == accords[i][0] for i in communs))
+        else:                                               # sans paroles calées : le ton où ses fondamentales recouvrent l'écoute
+            h_ecoute = Counter(int(a[0]) for a in accords if a is not None)
+            h_fichier = Counter(a[0] for a in suite)
+            d = max(range(12), key=lambda d: sum(h_fichier[r] * h_ecoute[(r + d) % 12] for r in h_fichier))
+        ancre = [None if a is None else transposer(a, d) for a in ancre]
+        S = [transposer(a, d) for a in suite]
+        S = [a if a[1] != "5" else (a[0], qualite_de(a[0]), a[2]) for a in S]
+        par_case, depart = suivre_le_fichier(S, ecoute_temps, est_premier, debuts, ancre, n)
+        poses = sorted(depart)
+        ligne.update({"calee": True, "transposition": d if d <= 6 else d - 12,
+                      "accords_poses": len(poses), "accords_sautes": len(S) - len(poses),
+                      "temps_couverts": sum(x is not None for x in par_case),
+                      "changements_sur_le_premier_temps": round(sum(1 for b in poses if b in est_premier) / max(1, len(poses)), 2),
+                      "accords_cales_sur_les_paroles": len(communs)})
         cales.append([u, par_case, ligne, d])
     print(f"{len(fichiers)} fichiers d'accords, dont {len(cales)} calés sur les paroles", flush=True)
 
