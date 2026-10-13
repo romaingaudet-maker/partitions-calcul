@@ -117,7 +117,7 @@ def suivre_le_fichier(S, T, est_premier, debuts, ancre, n, Lmax=16, gap_max=48):
     def note(a, i):
         x = 0.0 if tons_T[i] is None else 1.5 * len(tons(a) & tons_T[i]) / 3 - 0.5
         if ancre[i] is not None:
-            x += 0.6 if ancre[i][0] == a[0] else -0.3
+            x += 1.5 if ancre[i][0] == a[0] else -0.8
         return x
     cumul = []
     for a in S:
@@ -126,7 +126,7 @@ def suivre_le_fichier(S, T, est_premier, debuts, ancre, n, Lmax=16, gap_max=48):
             c.append(c[-1] + note(a, i))
         cumul.append(c)
     seg = lambda k, b, e: cumul[k][e] - cumul[k][b]
-    SAUT, TROU = 1.2, 0.12
+    SAUT, TROU = 0.6, 0.12
     NEG = -1e18
     meilleur = [dict() for _ in range(m)]                   # meilleur[k][b] = (note, précédent (k, b) ou None)
     for k in range(min(m, 4)):                              # le fichier peut commencer par quelques accords absents
@@ -143,7 +143,7 @@ def suivre_le_fichier(S, T, est_premier, debuts, ancre, n, Lmax=16, gap_max=48):
                 if b2 - b > Lmax + gap_max:
                     break
                 duree = min(b2 - b, Lmax)
-                val = v + seg(k, b, b + duree) - TROU * (b2 - b - duree) - penalite[b2] - (0.15 if duree not in (2, 4, 8, 16) else 0)
+                val = v + seg(k, b, b + duree) - TROU * (b2 - b - duree) - penalite[b2] - {4: 0.0, 8: 0.1, 2: 0.2, 16: 0.4}.get(duree, 0.3)
                 for saut in (0, 1):
                     k2 = k + 1 + saut
                     if k2 < m and val - SAUT * saut > meilleur[k2].get(b2, (NEG,))[0]:
@@ -265,6 +265,7 @@ def main():
     cales = []                                              # (adresse, accord par temps ou None, rapport, transposition)
     for u, suite, lignes, ligne in fichiers:
         cands = G.accrocher_aux_mots([(lignes, u)], mots, temps, lire) if len(lignes) >= 4 else []
+        ligne["lignes_chantees"] = [" ".join(f"{x}@{k}" for k, x in acc) + f"  ({len(w)} mots)" for w, acc in lignes]   # accords seuls
         ancre = cands[0][0] if cands else [None] * n
         communs = [i for i in range(n) if ancre[i] is not None and accords[i] is not None]
         if len(communs) >= 24:
