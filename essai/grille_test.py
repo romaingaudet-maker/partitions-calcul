@@ -206,10 +206,12 @@ def main():
     # 2b. Les suites d'accords de tous les fichiers d'accords, dans le ton du disque
     histo = Counter(cle(a) for _, g, _, _ in cales for a in g if a is not None) or Counter(cle(a) for a in ecoute if a)
     suites = []
+    # Une grille écartée du vote (calée trop loin des autres) garde ses suites d'accords et ses renversements : c'est
+    # son placement qui était douteux, pas forcément ses accords.
     for u, suite, lignes, ligne in fichiers:
-        if ligne.get("ecartee"):
-            continue
         d = next((x[3] for x in cales if x[0] == u), None)
+        if d is None and ligne.get("calee"):
+            d = ligne["transposition"] % 12
         if d is None:                                       # non calé : le ton où ses accords recouvrent le mieux les autres
             d = max(range(12), key=lambda d: sum(histo.get(cle(transposer(a, d)), 0) for a in suite))
             ligne["transposition"] = d if d <= 6 else d - 12
@@ -255,6 +257,9 @@ def main():
 
     # 3. Renversements : appris des fichiers qui en écrivent, selon l'accord et ce qui l'entoure
     avec_renv = [(u, s) for u, s in suites if any(a[2] is not None for a in s)]
+    for l in rapport["pages"]:
+        if any(l["page"] == u for u, _ in avec_renv):
+            l["source_des_renversements"] = True
     par_contexte, par_accord = defaultdict(Counter), defaultdict(Counter)
     for _, s in avec_renv:
         for j, a in enumerate(s):
