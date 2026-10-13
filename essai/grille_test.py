@@ -257,13 +257,24 @@ def main():
     for c in range(1, n):
         if comblee[c] or c in est_premier or not change(grille, c):
             continue
+        d0, nb = debuts[mesure_du_temps[c]]
+        if comblee[c - 1]:
+            # Début d'un passage couvert par les grilles (entrée du chant) : ce n'est pas un accord de passage, le
+            # changement est ramené au premier temps le plus proche (2e ou 3e temps : celui de sa mesure).
+            if c - d0 <= 2:
+                for j in range(d0, c):
+                    grille[j], comblee[j] = grille[c], False
+            else:
+                for j in range(c, min(d0 + nb, n)):
+                    grille[j], comblee[j] = grille[c - 1], True
+            ramenes += 1
+            continue
         appuis = sum(1 for _, g, _, _ in cales if change(g, c) and cle(g[c]) == cle(grille[c]))
         ecoute_ok = any(ecoute_temps[j] is not None and cle(ecoute_temps[j]) == cle(grille[c]) for j in (c, c + 1) if j < n)
         couvrent = sum(1 for _, g, _, _ in cales if g[c] is not None)
         if (appuis >= 2 and appuis >= 0.5 * couvrent) or ecoute_ok:
             passage += 1
             continue
-        d0, nb = debuts[mesure_du_temps[c]]
         a, fin = grille[c], c
         while fin < n and grille[fin] is not None and cle(grille[fin]) == cle(a):
             fin += 1
