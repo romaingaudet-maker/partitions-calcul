@@ -335,11 +335,13 @@ def main():
     par_contexte, par_accord = defaultdict(Counter), defaultdict(Counter)
     for _, s in avec_renv:
         for j, a in enumerate(s):
-            av = cle(s[j - 1]) if j else None
-            ap = cle(s[j + 1]) if j + 1 < len(s) else None
-            par_contexte[(av, cle(a), ap)][a[2]] += 1
+            # L'enchaînement se lit sur les fondamentales seules : « C » écrit majeur dans la grille et Dom entendu
+            # sont le même accord de Do pour savoir où va la basse.
+            av = s[j - 1][0] if j else None
+            ap = s[j + 1][0] if j + 1 < len(s) else None
+            par_contexte[(av, a[0], ap)][a[2]] += 1
             par_accord[cle(a)][a[2]] += 1
-    rapport["renversements_appris"] = {f"{NOMS[k[1][0]]}{'m' if k[1][1] else ''} entre {NOMS[k[0][0]] if k[0] else '-'} et {NOMS[k[2][0]] if k[2] else '-'}":
+    rapport["renversements_appris"] = {f"{NOMS[k[1]]} entre {NOMS[k[0]] if k[0] is not None else '-'} et {NOMS[k[2]] if k[2] is not None else '-'}":
                                        {("/" + NOMS[b] if b is not None else "sans"): v for b, v in c.items()}
                                        for k, c in par_contexte.items() if any(b is not None for b in c)}
     ajoutes = Counter()
@@ -348,10 +350,10 @@ def main():
         a = grille[c]
         if a[2] is not None:
             continue
-        av = cle(grille[sequence[x - 1]]) if x else None
-        ap = cle(grille[sequence[x + 1]]) if x + 1 < len(sequence) else None
+        av = grille[sequence[x - 1]][0] if x else None
+        ap = grille[sequence[x + 1]][0] if x + 1 < len(sequence) else None
         basse = None
-        ctx = par_contexte.get((av, cle(a), ap))
+        ctx = par_contexte.get((av, a[0], ap))
         if ctx and sum(ctx.values()) >= 2:
             b, nb = ctx.most_common(1)[0]
             if b is not None and nb / sum(ctx.values()) >= 0.5:
